@@ -169,9 +169,15 @@ class Client:
 
     # ---- resume fetch -----------------------------------------------------
     def get_resume(self):
-        """Return the full resume object (data.resume). Raises on failure."""
+        """Return the full resume object (data.resume). Raises on failure.
+
+        A freshly minted session can return `400 reloadClient:true` on its first
+        heavy read and then succeed; retry once on that signal before giving up.
+        """
         env = self.request(f"resumes/{self.resume_id}")
+        if not env.get("success") and env.get("reloadClient"):
+            env = self.request(f"resumes/{self.resume_id}")   # session-warmup retry
         if not env.get("success"):
             raise SystemExit(f"get resume failed: {json.dumps(env)[:200]} "
-                             "(session expired? refresh FLOWCV_COOKIE)")
+                             "(session expired? refresh FLOWCV_COOKIE or re-login)")
         return env["data"]["resume"]
