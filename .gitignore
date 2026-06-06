@@ -1,0 +1,15 @@
+# secrets / session
+.env
+.flowcv_env
+# fetched resume data & backups (contain personal info)
+resume_raw.json
+backup_resume_*.json
+# python
+__pycache__/
+*.pyc
+.flowcv_session
+# playwright screenshots/snapshots (contain resume content)
+.playwright-mcp/
+# generated content fragments / exports
+*.html
+resume.pdf
