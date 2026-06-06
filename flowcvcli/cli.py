@@ -1,8 +1,9 @@
 """Command-line interface over the FlowCV client.
 
-Run `python3 flowcv.py --help`. Auth + resume id come from .env / env vars
-(FLOWCV_RESUME_ID, and either FLOWCV_COOKIE or FLOWCV_EMAIL+FLOWCV_PASSWORD).
-Any command accepts `--resume-id <id>` to target a specific resume.
+Run `python3 flowcv.py --help`. Auth comes from .env / env vars
+(FLOWCV_COOKIE, or FLOWCV_EMAIL+FLOWCV_PASSWORD). The resume id is optional:
+with a single resume the tool auto-selects it; with several, set FLOWCV_RESUME_ID
+or pass `--resume-id <id>` (any command accepts it).
 """
 import argparse
 import json

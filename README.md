@@ -41,11 +41,16 @@ FLOWCV_EMAIL=you@example.com                # log in with credentials
 FLOWCV_PASSWORD=...                         # (session cached to .flowcv_session)
 ```
 
-- **RESUME_ID** — the UUID in the editor URL, or run `flowcv.py resumes`.
+- **RESUME_ID** is **optional** — with one resume the tool auto-selects it; set it
+  (or pass `--resume-id`) only if your account has several (`flowcv.py resumes`
+  lists them and a multi-resume run will prompt you to choose).
 - **COOKIE** — DevTools → Application → Cookies → `app.flowcv.com` → the
   `flowcvsidapp` value. That single cookie is the auth; it expires (re-login is
   automatic when email/password are set). Env vars override `.env`. Secrets are
   gitignored.
+
+> `download` with no `--token` renders **your own** resume; `download --token
+> <webToken>` fetches **any public** resume (e.g. to test or pull a candidate's).
 
 ## CLI
 

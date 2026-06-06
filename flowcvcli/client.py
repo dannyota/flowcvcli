@@ -100,7 +100,23 @@ class Client:
 
     @property
     def resume_id(self):
-        return self.cfg.require_resume_id()
+        """The target resume id. If none was configured, auto-use the account's
+        only resume; if there are several, require an explicit choice."""
+        if self.cfg.resume_id:
+            return self.cfg.resume_id
+        env = self.request("resumes/all")
+        resumes = (env.get("data") or {}).get("resumes") if env.get("success") else None
+        if resumes is None:
+            raise SystemExit("Could not list resumes to auto-select one — set "
+                             "FLOWCV_RESUME_ID or pass --resume-id.")
+        if len(resumes) == 1:
+            self.cfg.resume_id = resumes[0]["id"]   # cache for the rest of the run
+            return self.cfg.resume_id
+        if not resumes:
+            raise SystemExit("This account has no resumes yet.")
+        listing = "\n".join(f"  {r.get('id')}  {r.get('title') or '(untitled)'}" for r in resumes)
+        raise SystemExit("You have multiple resumes — choose one with --resume-id <id> "
+                         "or FLOWCV_RESUME_ID:\n" + listing)
 
     def now_iso(self):
         return now_iso()
