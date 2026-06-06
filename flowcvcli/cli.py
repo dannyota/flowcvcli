@@ -155,12 +155,8 @@ def cmd_templates(a):
 
 
 def cmd_apply_template(a):
-    fc = _fc(a)
-    t = next((x for x in fc.list_templates()
-              if isinstance(x, dict) and (x.get("id") or x.get("templateId")) == a.template_id), None)
-    if t and t.get("isPremium"):
-        print(f"note: '{_tname(t)}' is a PAID template — applying it may require a FlowCV subscription.")
-    _result(fc.apply_template(a.template_id), f"apply-template {a.template_id[:8]}")
+    # apply_template refuses a paid template unless --force (it would corrupt a free resume)
+    _result(_fc(a).apply_template(a.template_id, force=a.force), f"apply-template {a.template_id[:8]}")
 
 
 def cmd_download(a):
@@ -239,7 +235,9 @@ def build_parser():
     s = add("avatar"); s.add_argument("action", choices=["on", "off", "set", "remove"])
     s.add_argument("src", nargs="?", help="URL or file path (for `avatar set`)"); s.set_defaults(fn=cmd_avatar)
     add("templates").set_defaults(fn=cmd_templates)
-    s = add("apply-template"); s.add_argument("template_id"); s.set_defaults(fn=cmd_apply_template)
+    s = add("apply-template"); s.add_argument("template_id")
+    s.add_argument("--force", action="store_true", help="apply even a paid template (needs a subscription)")
+    s.set_defaults(fn=cmd_apply_template)
 
     s = add("download"); s.add_argument("-o", "--output"); s.add_argument("--pages", type=int, default=10)
     s.add_argument("--token", help="download a public resume by its share token (no auth)")

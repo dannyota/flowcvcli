@@ -58,17 +58,24 @@ class CustomizationMixin:
                         return data[key]
         return []
 
-    def apply_template(self, template_id):
+    def apply_template(self, template_id, force=False):
         """Apply a published template by id. Return the envelope dict.
 
         Looks the template up in the catalog, then PATCHes `apply_template` with
         its full `customization` and the resume's current `personalDetails`.
-        Raises SystemExit if no template matches `template_id`.
+        Raises SystemExit if no template matches, or if it is a paid (`isPremium`)
+        template and `force` is not set — applying a paid template on a free
+        account corrupts the resume (subsequent reads start failing with 400).
         """
         tpl = next((t for t in self.list_templates()
                     if isinstance(t, dict) and (t.get("id") or t.get("templateId")) == template_id), None)
         if tpl is None:
             raise SystemExit(f"template not found: {template_id!r}")
+        if tpl.get("isPremium") and not force:
+            raise SystemExit(
+                f"'{tpl.get('title') or template_id}' is a PAID template. Applying it on a free "
+                "account corrupts the resume (reads then fail with 400). Use force=True "
+                "(CLI: --force) only if your account has a FlowCV subscription.")
         body = {
             "resumeId": self.resume_id,
             "templateId": template_id,
