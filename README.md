@@ -1,123 +1,128 @@
 # flowcv-cli
 
-A small, dependency-free Python CLI to fetch, inspect, and edit a
-[FlowCV](https://flowcv.com) resume from the terminal. It uses FlowCV's private
-JSON API (the same requests the web editor makes), so it works for **any** FlowCV
-resume — you just supply your own resume id and session cookie.
+Control a [FlowCV](https://flowcv.com) resume from the command line **or** from
+Python — content, header, links, **customization**, **templates**, **avatar**,
+and PDF render. It drives FlowCV's private JSON API (the same calls the web app
+makes), so it works for any FlowCV resume with your own session.
 
-> Unofficial. Uses an undocumented API and your own session — for personal use.
-> Standard library only (Python 3.8+); no `pip install` needed.
+> Unofficial; undocumented API; for personal use. Standard library only
+> (Python 3.8+) — no `pip install`. Auth is your own `flowcvsidapp` session
+> cookie (or email/password). See [`docs/API.md`](docs/API.md) for the API.
+
+## Layout
+
+```
+flowcv.py              # thin entry point (python3 flowcv.py …)
+flowcvcli/             # the package
+  config.py            #   resolve resume id + auth from .env / env vars
+  client.py            #   HTTP, login, session cache, 401 re-login, get_resume
+  markup.py            #   markdown <-> FlowCV rich-text HTML
+  content.py           #   ContentMixin   — sections & entries
+  personal.py          #   PersonalMixin  — header details & links
+  customization.py     #   CustomizationMixin — styling deltas & templates
+  photo.py             #   PhotoMixin     — avatar upload / toggle
+  resume.py            #   ResumeMixin    — list, download, publish, share
+  api.py               #   FlowCV = Client + all mixins
+  cli.py               #   argparse CLI over FlowCV
+docs/API.md            # reverse-engineered API reference
+```
 
 ## Setup
 
-1. Copy the example config and fill it in:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-   ```dotenv
-   FLOWCV_RESUME_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-   FLOWCV_COOKIE=flowcvsidapp=s%3A...
-   ```
-
-   - **RESUME_ID** — the UUID in your FlowCV editor URL (`app.flowcv.com/resumes/<id>`).
-   - **COOKIE** — DevTools → Application → Cookies → `app.flowcv.com` → copy the
-     **`flowcvsidapp`** value as `flowcvsidapp=<value>`. That single session cookie
-     is the only auth needed (not `i18n`/`loggedin`/`appVersion`). It expires —
-     refresh it when `get` returns HTTP 401.
-
-   You can also pass config via the `FLOWCV_RESUME_ID` / `FLOWCV_COOKIE` environment
-   variables (they override `.env`). `.env` is gitignored.
-
-## Usage
-
 ```bash
-python3 flowcv.py get                       # fetch -> resume_raw.json (+ timestamped backup)
-python3 flowcv.py show                       # list every section, entry id, label, dates
-python3 flowcv.py show work                  # one section
-python3 flowcv.py dump work <entryId>        # full entry (readable text + raw fields)
+cp .env.example .env
 ```
 
-Edit an entry's rich-text body from a markdown file:
-
-```bash
-python3 flowcv.py desc work <entryId> --file role.md
-python3 flowcv.py desc profile <entryId> --field text --file summary.md   # the summary
+```dotenv
+FLOWCV_RESUME_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# auth — pick ONE:
+FLOWCV_COOKIE=flowcvsidapp=s%3A...          # the session cookie only, OR
+FLOWCV_EMAIL=you@example.com                # log in with credentials
+FLOWCV_PASSWORD=...                         # (session cached to .flowcv_session)
 ```
 
-Set a single field (raw value), header details, or links:
+- **RESUME_ID** — the UUID in the editor URL, or run `flowcv.py resumes`.
+- **COOKIE** — DevTools → Application → Cookies → `app.flowcv.com` → the
+  `flowcvsidapp` value. That single cookie is the auth; it expires (re-login is
+  automatic when email/password are set). Env vars override `.env`. Secrets are
+  gitignored.
+
+## CLI
 
 ```bash
-python3 flowcv.py field work <entryId> employer --text "ACME Corp"
-python3 flowcv.py pd jobTitle --text "Security Leader — Governance, Operations & Automation"
-```
+python3 flowcv.py resumes                       # list resumes (id, title, share token)
+python3 flowcv.py show [section]                # sections + entries (ids, labels, dates)
+python3 flowcv.py dump <section> <id>           # one entry, fields + rich text
 
-Header links are stored as `social` entries (`linkedIn`, `orcid`, `googlescholar`,
-`github`, …), each shown per `detailsOrder`:
+# content (markdown mini-format below); `add` creates the section if needed
+python3 flowcv.py add work --set title="Engineer" --set company="Acme" \
+        --set start=01/2022 --set end=Present --text $'- Did a measurable thing.'
+python3 flowcv.py desc work <id> --file role.md
+python3 flowcv.py field work <id> employer --text "Acme Corp"
+python3 flowcv.py rm work <id>
 
-```bash
-python3 flowcv.py links                                   # list links + display order
+# header details & links (links are social entries: orcid, googlescholar, github…)
+python3 flowcv.py pd jobTitle --text "Security Leader"
 python3 flowcv.py link orcid ORCID https://orcid.org/0000-0000-0000-0000
-python3 flowcv.py link googlescholar "Google Scholar" "https://scholar.google.com/citations?user=XXXX"
-python3 flowcv.py unlink googlescholar                    # remove (delete) a link
-python3 flowcv.py linkedin LinkedIn                       # relabel LinkedIn (display only)
+python3 flowcv.py unlink orcid ; python3 flowcv.py links
+
+# avatar
+python3 flowcv.py avatar set https://example.com/me.png   # upload from URL or file
+python3 flowcv.py avatar on | off | remove
+
+# styling (a delta into resume.customization) and templates
+python3 flowcv.py customize font.fontFamily "Source Sans Pro"
+python3 flowcv.py customize colors.basic.single '"#0e374e"'
+python3 flowcv.py templates                     # lists each as [free] / [PAID] (paid needs a subscription)
+python3 flowcv.py apply-template <templateId>   # warns first if the template is paid
+
+# render & share
+python3 flowcv.py download -o resume.pdf        # the rendered PDF
+python3 flowcv.py download --token <webToken> -o out.pdf   # any PUBLIC resume by its share token (no auth)
+python3 flowcv.py share | publish | unpublish
+
+python3 flowcv.py login                          # refresh the cached session
+python3 flowcv.py md2html --file role.md         # preview HTML (offline)
 ```
 
-Add or remove entries:
+Any command takes `--resume-id <id>` to target a specific resume.
 
-```bash
-python3 flowcv.py add work --file role.md \
-  --set title="Software Engineer" --set company="ACME" --set start=01/2020 --set end=12/2021
-python3 flowcv.py rm work <entryId>
+## Library (for LLM agents / scripts)
+
+```python
+from flowcvcli import FlowCV
+
+fc = FlowCV()                                   # or FlowCV(resume_id="...")
+fc.set_personal_field("fullName", "Jane Doe")
+fc.add_entry("work", sets={"jobTitle": "Engineer", "employer": "Acme",
+                           "startDateNew": "01/2022", "endDateNew": "Present"},
+             md="- Shipped a thing with **measurable** impact.")
+fc.set("font.fontFamily", "Source Sans Pro")    # a customization delta
+fc.set_photo("https://example.com/me.png")      # avatar from URL
+fc.apply_template("a3fb6c37-...")               # a design from `list_templates()`
+fc.save_pdf("resume.pdf")                        # render
 ```
 
-Public web resume (sharing):
+### Build → render → check → improve
 
-```bash
-python3 flowcv.py share        # status + public URL (https://flowcv.com/resume/<webToken>)
-python3 flowcv.py publish      # enable the public web resume
-python3 flowcv.py unpublish    # disable it
-```
+The PDF *is* the rendered output. An agent can write content, `save_pdf(...)`,
+**open the PDF to see the actual layout**, then adjust and re-render — a closed
+feedback loop for building a resume from raw info.
 
-Preview the HTML a markdown file produces (offline, no network):
-
-```bash
-python3 flowcv.py md2html --file role.md
-```
-
-## Markdown mini-format
-
-Used by `desc` and `add`:
+## Markdown mini-format (`desc` / `add`)
 
 | You write | You get |
 |---|---|
 | blank line | block separator |
-| `## Heading` or `**Whole line bold**` | bold paragraph (a subheader) |
-| `- item` | bullet (consecutive lines = one list) |
+| `## Heading` / `**Whole line bold**` | bold subheader |
+| `- item` | bullet (consecutive = one list) |
 | anything else | justified paragraph |
 | `**bold**` inline | `<strong>bold</strong>` |
 
-Example `role.md`:
-
-```markdown
-Short role intro line.
-
-**Highlights**
-- Did a measurable thing with **clear** impact.
-- Shipped another thing.
-```
-
 ## Notes
 
-- **Read-modify-write.** Every edit command GETs the whole resume, changes only
-  the target part, and PATCHes it back — unrelated fields are never touched.
-  (`personalDetails` is saved as one object, so the tool always sends the full
-  object with just your change applied.)
-- Every write prints `success=True/False`. `get` saves a timestamped backup so
-  changes are reversible.
-- After editing, re-export the PDF from the FlowCV web app — the API stores the
-  content; the PDF is rendered client-side.
-- New entries always **append to the bottom** of their section. There is no
-  reorder endpoint; to reorder, reassign content across the existing slots.
-```
+- **Read-modify-write**: edits fetch the resume, change one part, and send it
+  back — unrelated fields are never touched.
+- New entries append to the bottom of their section (no reorder endpoint).
+- After editing, re-export the PDF from the web app too if you want the
+  account's stored copy refreshed; `download` already renders the current state.
