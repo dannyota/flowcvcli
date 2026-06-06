@@ -1,12 +1,12 @@
 # flowcvcli
 
 [![PyPI](https://img.shields.io/pypi/v/flowcvcli.svg)](https://pypi.org/project/flowcvcli/)
-[![Python](https://img.shields.io/pypi/pyversions/flowcvcli.svg)](https://pypi.org/project/flowcvcli/)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://pypi.org/project/flowcvcli/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Control a [FlowCV](https://flowcv.com) resume from the **command line** or from
 **Python** — content, header & links, **customization**, **templates**,
-**avatar**, reorder/hide, multi-resume management, publish, and **PDF export**.
+**avatar**, reorder/hide, multi-resume management, **backup/restore**, publish, and **PDF export**.
 It drives FlowCV's private JSON API (the same calls the web app makes), so it
 works for any FlowCV resume with your own session. **Zero dependencies** (Python
 standard library only), so it's easy to drop into scripts and LLM agents.
@@ -66,10 +66,13 @@ flowcv duplicate ["Copy title"]      # full copy of the current resume
 flowcv rename "New Title"            # rename the current resume
 flowcv delete-resume --yes           # permanent (refuses without --yes)
 
-# content (markdown mini-format below); `add` creates the section if needed
+# content (markdown mini-format below); `add` creates the section if needed.
+# --set aliases (title/company/link) resolve per section (work->jobTitle, publication->title…)
 flowcv add work --set title="Engineer" --set company="Acme" \
        --set start=01/2022 --set end=Present --text $'- Did a measurable thing.'
-flowcv desc work <id> --file role.md
+flowcv add custom2 --section-name "Open Source" --icon code --text "…"   # heading+icon at creation
+flowcv desc work <id> --file role.md           # rich text; --field is optional (auto: profile=text, skill=infoHtml)
+flowcv date publication <id> --year 2018       # structured date (year-only by default)
 flowcv field work <id> employer --text "Acme Corp"
 flowcv rm work <id>
 
@@ -79,7 +82,7 @@ flowcv hide work <id> ; flowcv show-entry work <id>
 flowcv rename-section skill "Core Skills"
 flowcv section-icon skill head-side-brain
 flowcv rm-section custom1 --yes           # delete a section + its entries
-flowcv reorder-sections profile work skill education   # one-column order
+flowcv reorder-sections profile work skill education   # set one-column order (no args = print current)
 
 # header details & links (links are social entries: orcid, googlescholar, github…)
 flowcv pd jobTitle --text "Security Leader"
@@ -100,6 +103,10 @@ flowcv apply-template <templateId>   # warns first if the template is paid
 flowcv download -o resume.pdf        # the rendered PDF
 flowcv download --token <webToken> -o out.pdf   # any PUBLIC resume by its share token (no auth)
 flowcv share | publish | unpublish
+
+# backup / restore
+flowcv export -o backup.json          # full resume snapshot (JSON) — keep one before big edits
+flowcv import backup.json             # restore the snapshot into a NEW resume (non-destructive)
 
 flowcv login                          # refresh the cached session
 flowcv md2html --file role.md         # preview HTML (offline)
@@ -129,6 +136,12 @@ fc.rename_section("skill", "Core Skills"); fc.delete_section("custom1")
 fc.hide_entry("work", "id", hidden=True)
 new_id = fc.create_resume("Second Resume")          # or fc.duplicate_resume()
 fc.rename_resume("New Title"); fc.delete_resume()    # delete is permanent
+fc.set_date("publication", "id", year=2018)         # structured date (year-only)
+
+# backup / restore
+import json
+json.dump(fc.export_resume(), open("backup.json", "w"))   # full snapshot
+new_id = fc.import_resume(json.load(open("backup.json")))  # restore into a NEW resume
 ```
 
 ### Build → render → check → improve
@@ -143,9 +156,11 @@ feedback loop for building a resume from raw info.
 |---|---|
 | blank line | block separator |
 | `## Heading` / `**Whole line bold**` | bold subheader |
+| `***Whole line***` | bold + italic subheader |
 | `- item` | bullet (consecutive = one list) |
 | anything else | justified paragraph |
-| `**bold**` inline | `<strong>bold</strong>` |
+| `**bold**` / `***bold-italic***` inline | `<strong>` / `<strong><em>…</em></strong>` |
+| `[text](url)` inline | link |
 
 ## How it works
 
