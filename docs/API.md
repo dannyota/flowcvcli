@@ -9,6 +9,17 @@ Standard JSON envelope: `{ "success": bool, "data": ..., "error": "", "code": in
 A missing endpoint returns `code:404`; an existing endpoint with a bad/empty body
 returns `code:500` (handler ran, validation failed) — useful for probing.
 
+For **how the editor renders the live preview and when it persists edits**, see
+[`RENDERING.md`](RENDERING.md). Short version: the preview is client-side React
+HTML (no PDF/canvas), edits update instantly with no network, and saves are
+debounced into the `save_entry` / `save_personal_details` / `save_customization`
+PATCHes documented below — i.e. exactly what this tool sends.
+
+**Editor boot sequence** (what the SPA fetches on load): `GET /auth/init_user`,
+`GET /resumes/all`, `GET /letters/all`, `GET /trackers/all`, `GET /signatures/all`,
+`GET /websites/all`, `GET /users/fetch_subscription_infos`,
+`GET /users/invoices/pending_review`, then `GET /resumes/{id}` for the open resume.
+
 ## Auth
 
 | Method | Path | Body | Notes |
@@ -112,6 +123,20 @@ display with the customization delta `header.photo.show` = `true|false`.
 The full `customization` schema is visible in `GET /resumes/{id}` (under
 `data.resume.customization`) and in the `create` default.
 
+The **Customize** panel groups (each = one or more delta paths under
+`customization`) are: **Document** (page format, date format), **Templates**
+(browse/apply, below), **Layout** (`layout.colsFromDetails…` columns one/two/mix,
+per-section placement), **Font Size**, **Spacing** (`spacing.*`), **Entry Layout**,
+**Section Headings** (`heading.style`, `heading.capitalization`, heading icons),
+**Font** — separate **body font** and **name font** — **Colors**
+(`colors.mode`/`colors.basic.single`, accent, and *Color Area*: full / page /
+header / border), **Header** (text alignment, details arrangement, icon style),
+**Photo** (`header.photo.show`), **Link Styling**, **Footer** (toggle page
+numbers / email / name), and per-**Section** customizations. "Create template"
+publishes the current design as a shareable template. The panel also has
+**undo/redo**. All of these are just `save_customization` deltas — discover exact
+paths by diffing `data.resume.customization` before/after a change in the UI.
+
 ## Templates
 
 | Method | Path | Returns |
@@ -124,3 +149,43 @@ FlowCV subscription to apply. Show this to users before they apply one.
 
 To apply a template: pick its `templateId` + `customization` from the catalog and
 PATCH `apply_template` (above).
+
+## Download & share menu (resume editor)
+
+The editor's top-right controls map to these endpoints:
+
+| UI control | Endpoint / effect |
+|---|---|
+| **Download** button | `GET /resumes/download` → PDF (server render). Shows a "✅ downloaded" modal after. |
+| ⋯ → **Download via email** | emails the PDF to the account (send-email endpoint; body not captured). |
+| ⋯ → **Get shareable link** | the **web resume**: *Enable sharing* = `publish_web_resume {publish}`; link is `https://flowcv.com/resume/{webToken}`; *Display download button* gates the public `public/download_resume?token=` PDF (off → 400). |
+
+## AI Tools (per resume, Pro plan) — `/resume/ai-tools`
+
+Gated behind the **Pro** subscription ("AI features are available on our Pro
+plan"). Two tools observed (both Beta): **Translate resume** (create a translated
+copy in another language, layout intact) and **Check spelling & grammar** (scan +
+fix suggestions). Endpoints not captured (Pro-gated on the test account).
+
+## Other FlowCV products (same account & session, separate APIs)
+
+FlowCV is more than resumes. The same `flowcvsidapp` session authenticates these
+sibling products — each with its own `…/all` list endpoint, all fetched on editor
+load. This tool currently covers **resumes only**; these are documented for
+discovery, not yet implemented:
+
+| Product | List endpoint | UI |
+|---|---|---|
+| **Cover Letters** | `GET /api/letters/all` | `/cover-letters` |
+| **Job Tracker** | `GET /api/trackers/all` | `/job-tracker` |
+| **Email Signatures** | `GET /api/signatures/all` | email-signature generator |
+| **Personal Websites** | `GET /api/websites/all` | personal-site builder |
+
+Account/billing: `GET /api/users/fetch_subscription_infos` (plan + entitlements;
+free accounts get one resume, premium templates and AI gated),
+`GET /api/users/invoices/pending_review`. The user object from `auth/login` also
+carries `paid`, `activePlans`, AB-test flags, and `numberOfLogins`.
+
+> Free vs paid recap: first resume is free forever; additional resumes, premium
+> templates (`isPremium`), AI Tools, and likely the public-download button are
+> Pro features. Show users the free/paid split before they hit a 400 or upsell.

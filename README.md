@@ -7,7 +7,8 @@ makes), so it works for any FlowCV resume with your own session.
 
 > Unofficial; undocumented API; for personal use. Standard library only
 > (Python 3.8+) — no `pip install`. Auth is your own `flowcvsidapp` session
-> cookie (or email/password). See [`docs/API.md`](docs/API.md) for the API.
+> cookie (or email/password). See [`docs/API.md`](docs/API.md) for the API and
+> [`docs/RENDERING.md`](docs/RENDERING.md) for how the live preview renders/saves.
 
 ## Layout
 
@@ -25,7 +26,13 @@ flowcvcli/             # the package
   api.py               #   FlowCV = Client + all mixins
   cli.py               #   argparse CLI over FlowCV
 docs/API.md            # reverse-engineered API reference
+docs/RENDERING.md      # how the editor renders the live preview & debounces saves
 ```
+
+> Scope: this tool covers **resumes**. The same FlowCV account/session also has
+> Cover Letters, Job Tracker, Email Signatures and Personal Websites (separate
+> APIs — see `docs/API.md` "Other FlowCV products"); those are documented but not
+> yet implemented here.
 
 ## Setup
 
