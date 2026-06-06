@@ -66,12 +66,26 @@ python3 flowcv.py resumes                       # list resumes (id, title, share
 python3 flowcv.py show [section]                # sections + entries (ids, labels, dates)
 python3 flowcv.py dump <section> <id>           # one entry, fields + rich text
 
+# manage resumes (multi-resume / paid plans)
+python3 flowcv.py new "My Second Resume"        # new resume (same details+style, no content) -> prints id
+python3 flowcv.py duplicate ["Copy title"]      # full copy of the current resume
+python3 flowcv.py rename "New Title"             # rename the current resume
+python3 flowcv.py delete-resume --yes           # permanent (refuses without --yes)
+
 # content (markdown mini-format below); `add` creates the section if needed
 python3 flowcv.py add work --set title="Engineer" --set company="Acme" \
         --set start=01/2022 --set end=Present --text $'- Did a measurable thing.'
 python3 flowcv.py desc work <id> --file role.md
 python3 flowcv.py field work <id> employer --text "Acme Corp"
 python3 flowcv.py rm work <id>
+
+# reorder / hide / sections
+python3 flowcv.py reorder work <id3> <id1> <id2>     # set entry order (all of the section's ids)
+python3 flowcv.py hide work <id> ; python3 flowcv.py show-entry work <id>
+python3 flowcv.py rename-section skill "Core Skills"
+python3 flowcv.py section-icon skill head-side-brain
+python3 flowcv.py rm-section custom1 --yes           # delete a section + its entries
+python3 flowcv.py reorder-sections profile work skill education   # one-column order
 
 # header details & links (links are social entries: orcid, googlescholar, github…)
 python3 flowcv.py pd jobTitle --text "Security Leader"
@@ -113,6 +127,13 @@ fc.set("font.fontFamily", "Source Sans Pro")    # a customization delta
 fc.set_photo("https://example.com/me.png")      # avatar from URL
 fc.apply_template("a3fb6c37-...")               # a design from `list_templates()`
 fc.save_pdf("resume.pdf")                        # render
+
+# structure & resume management
+fc.reorder_entries("work", ["id3", "id1", "id2"])   # set entry order
+fc.rename_section("skill", "Core Skills"); fc.delete_section("custom1")
+fc.hide_entry("work", "id", hidden=True)
+new_id = fc.create_resume("Second Resume")          # or fc.duplicate_resume()
+fc.rename_resume("New Title"); fc.delete_resume()    # delete is permanent
 ```
 
 ### Build → render → check → improve

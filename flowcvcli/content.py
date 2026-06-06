@@ -118,3 +118,51 @@ class ContentMixin:
     def set_description(self, section, entry_id, md, field="description"):
         """Set a rich-text field to md_to_html(md) on an entry."""
         return self.set_field(section, entry_id, field, md_to_html(md))
+
+    def hide_entry(self, section, entry_id, hidden=True):
+        """Show/hide an entry (sets its `isHidden`). Hidden entries stay in the
+        resume but are omitted from the rendered output."""
+        return self.set_field(section, entry_id, "isHidden", bool(hidden))
+
+    # ---- section-level ops ------------------------------------------------
+    def reorder_entries(self, section, order):
+        """Set the order of entries in a section. `order` is the list of entry
+        ids in the desired order (must be a permutation of the section's ids).
+
+        PATCH save_entries_order with `disableAutoSort` so the manual order sticks
+        (FlowCV otherwise auto-sorts by date)."""
+        resume = self.get_resume()
+        have = [e.get("id") for e in self.find_section(resume, section).get("entries") or []]
+        order = list(order)
+        if set(order) != set(have):
+            raise SystemExit(f"reorder ids must be exactly the section's entries.\n"
+                             f"  given:   {order}\n  section: {have}")
+        return self.request("resumes/save_entries_order", method="PATCH",
+                            body={"resumeId": self.resume_id, "sectionId": section,
+                                  "newEntriesIdsOrder": order, "disableAutoSort": True})
+
+    def rename_section(self, section, display_name):
+        """PATCH save_section_name — change a section's heading text."""
+        return self.request("resumes/save_section_name", method="PATCH",
+                            body={"resumeId": self.resume_id, "sectionId": section,
+                                  "displayName": display_name})
+
+    def set_section_icon(self, section, icon_key):
+        """PATCH save_section_icon — change a section's icon (e.g. 'briefcase')."""
+        return self.request("resumes/save_section_icon", method="PATCH",
+                            body={"resumeId": self.resume_id, "sectionId": section,
+                                  "iconKey": icon_key})
+
+    def delete_section(self, section):
+        """DELETE delete_section — remove a whole section and all its entries."""
+        return self.request("resumes/delete_section", method="DELETE",
+                            query={"resumeId": self.resume_id, "sectionId": section})
+
+    def reorder_sections(self, section_ids, layout="one"):
+        """Set the section order for a column layout via the customization field
+        `sectionOrder.<layout>.sectionsSorted`. `layout` is 'one' (single column;
+        default) — two-column layouts store left/right lists separately.
+
+        Sections are ordered in `resume.customization.sectionOrder`, not in
+        `content`, so this is a `save_customization` delta."""
+        return self.set(f"sectionOrder.{layout}.sectionsSorted", list(section_ids))

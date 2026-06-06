@@ -61,6 +61,28 @@ def cmd_resumes(a):
         print(f"  {r.get('id','(no id)')}  {(r.get('title') or '(untitled)'):20}  web:{r.get('webToken','-')} [{live}]")
 
 
+def cmd_new(a):
+    new_id = _fc(a).create_resume(a.title)
+    print(f"created new resume -> {new_id}")
+
+
+def cmd_duplicate(a):
+    new_id = _fc(a).duplicate_resume(a.title)
+    print(f"duplicated -> {new_id}")
+
+
+def cmd_rename(a):
+    _result(_fc(a).rename_resume(a.title), f"rename resume -> {a.title!r}")
+
+
+def cmd_delete_resume(a):
+    fc = _fc(a)
+    rid = fc.resume_id
+    if not a.yes:
+        sys.exit(f"refusing to delete resume {rid} without --yes (this is permanent).")
+    _result(fc.delete_resume(rid), f"delete resume {rid[:8]}")
+
+
 def cmd_show(a):
     resume = _fc(a).get_resume()
     for sec, obj in (resume.get("content") or {}).items():
@@ -94,6 +116,37 @@ def cmd_add(a):
 
 def cmd_rm(a):
     _result(_fc(a).delete_entry(a.section, a.entry), f"rm {a.section}/{a.entry[:8]}")
+
+
+def cmd_reorder(a):
+    _result(_fc(a).reorder_entries(a.section, a.ids), f"reorder {a.section} ({len(a.ids)} entries)")
+
+
+def cmd_hide(a):
+    _result(_fc(a).hide_entry(a.section, a.entry, hidden=True), f"hide {a.section}/{a.entry[:8]}")
+
+
+def cmd_show_entry(a):
+    _result(_fc(a).hide_entry(a.section, a.entry, hidden=False), f"show {a.section}/{a.entry[:8]}")
+
+
+def cmd_rename_section(a):
+    _result(_fc(a).rename_section(a.section, a.name), f"rename-section {a.section}")
+
+
+def cmd_section_icon(a):
+    _result(_fc(a).set_section_icon(a.section, a.icon), f"section-icon {a.section}={a.icon}")
+
+
+def cmd_rm_section(a):
+    fc = _fc(a)
+    if not a.yes:
+        sys.exit(f"refusing to delete section {a.section!r} and all its entries without --yes.")
+    _result(fc.delete_section(a.section), f"rm-section {a.section}")
+
+
+def cmd_reorder_sections(a):
+    _result(_fc(a).reorder_sections(a.ids, layout=a.layout), f"reorder-sections ({a.layout})")
 
 
 def cmd_field(a):
@@ -206,6 +259,12 @@ def build_parser():
     add("login").set_defaults(fn=cmd_login)
     add("resumes").set_defaults(fn=cmd_resumes)
 
+    s = add("new"); s.add_argument("title"); s.set_defaults(fn=cmd_new)
+    s = add("duplicate"); s.add_argument("title", nargs="?"); s.set_defaults(fn=cmd_duplicate)
+    s = add("rename"); s.add_argument("title"); s.set_defaults(fn=cmd_rename)
+    s = add("delete-resume"); s.add_argument("--yes", action="store_true", help="confirm permanent deletion")
+    s.set_defaults(fn=cmd_delete_resume)
+
     s = add("show"); s.add_argument("section", nargs="?"); s.set_defaults(fn=cmd_show)
     s = add("dump"); s.add_argument("section"); s.add_argument("entry"); s.set_defaults(fn=cmd_dump)
 
@@ -215,6 +274,21 @@ def build_parser():
     s.set_defaults(fn=cmd_add)
 
     s = add("rm"); s.add_argument("section"); s.add_argument("entry"); s.set_defaults(fn=cmd_rm)
+
+    s = add("reorder"); s.add_argument("section")
+    s.add_argument("ids", nargs="+", help="entry ids in the desired order (all of the section's ids)")
+    s.set_defaults(fn=cmd_reorder)
+    s = add("hide"); s.add_argument("section"); s.add_argument("entry"); s.set_defaults(fn=cmd_hide)
+    s = add("show-entry"); s.add_argument("section"); s.add_argument("entry"); s.set_defaults(fn=cmd_show_entry)
+    s = add("rename-section"); s.add_argument("section"); s.add_argument("name"); s.set_defaults(fn=cmd_rename_section)
+    s = add("section-icon"); s.add_argument("section"); s.add_argument("icon", help="icon key, e.g. briefcase")
+    s.set_defaults(fn=cmd_section_icon)
+    s = add("rm-section"); s.add_argument("section")
+    s.add_argument("--yes", action="store_true", help="confirm deleting the section + its entries")
+    s.set_defaults(fn=cmd_rm_section)
+    s = add("reorder-sections"); s.add_argument("ids", nargs="+", help="section ids in the desired order")
+    s.add_argument("--layout", default="one", help="column layout to reorder (one|two|mix; default one)")
+    s.set_defaults(fn=cmd_reorder_sections)
 
     s = add("field"); s.add_argument("section"); s.add_argument("entry"); s.add_argument("field")
     g = s.add_mutually_exclusive_group(required=True); g.add_argument("--text"); g.add_argument("--file")

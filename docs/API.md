@@ -37,20 +37,24 @@ on the same cookie jar → the jar now holds the authenticated `flowcvsidapp`.
 |---|---|---|---|
 | GET | `/resumes/all` | — | `data.resumes[]` (id, title, webToken, webResumeLive, order, …) |
 | GET | `/resumes/{resumeId}` | — | `data.resume` (full resume object) |
-| POST | `/resumes/create` | `{clientResume: {…full default resume…}}` | creates a blank resume; server assigns real id. The default object has `title`, empty `personalDetails`/`content`, and a full default `customization`. |
+| POST | `/resumes/create` | `{clientResume: {…full resume object…}}` | create a resume. The body must be a **complete** resume object (every NOT-NULL column), so the reliable way is to **clone a full existing resume** (`GET /resumes/{id}`), reassign `id`+`uuid`, set `title`, empty `content` (or keep it for a duplicate), and **drop** `webToken`/`feedbackToken`/`createdAt`/`updatedAt` (server regenerates). A hand-built partial body fails with Postgres `23502` (not-null). Note: the one-resume free-plan cap is **not** enforced on this endpoint. |
+| POST | `/resumes/duplicate` | `{resumeId}` | native duplicate — but returned a generic error in testing; duplicating via `create` (clone, keep `content`) is what this tool does instead. |
+| PATCH | `/resumes/rename_resume` | `{resumeId, resumeTitle}` | rename a resume |
+| DELETE | `/resumes/delete_resume?resumeId={id}` | — | **permanently delete** a resume (irreversible) |
 | PATCH | `/resumes/apply_template` | `{resumeId, templateId, customization: {…template's full customization…}, personalDetails: {…current…}}` | applies a design. `templateId` + `customization` come from the template list (below). |
-| PATCH | `/resumes/rename_resume` | `{resumeId, …}` exists (body shape TODO — not `{title}`) | rename |
 | PATCH | `/resumes/publish_web_resume` | `{publish: bool, resumeId}` | toggle the public web resume |
 | GET | `/resumes/download?resumeId={id}&previewPageCount={n}` | — | **PDF bytes** (`application/pdf`). `previewPageCount` does not truncate; any value returns the full doc. |
 | GET | `/api/public/download_resume?token={webToken}` | — | **public** PDF of any *shared* resume by its web token — no auth/ownership needed. (Only when the resume's download is enabled; otherwise 400.) |
 | DELETE | `/resumes/delete_entry?resumeId&sectionId&entryId` | — | delete a content entry (see below) |
 
 The full-resume GET also exposes `webToken` (public URL
-`https://flowcv.com/resume/{webToken}`), `webResumeLive`, `feedbackToken`.
-
-> Not yet captured: delete-**resume** endpoint (the card "⋯ → Delete" — not
-> `delete_resume`/`remove_resume`/`DELETE /resumes/{id}`, all 404), `save_section`
-> body (endpoint exists), `rename_resume` body.
+`https://flowcv.com/resume/{webToken}`), `webResumeLive`, `feedbackToken`. Top-level
+resume keys (for the `create` clone): `id, userId, mongoId, title, order,
+feedbackToken, webToken, uuid, feedbackEnabled, webResumeLive,
+webResumeDownloadBtn, webResumeSearchIndex, webResumeCached, personalDetails,
+content, customization, feedback, businessDetails, downloads,
+usingBusinessTemplateId, schemaVersion, lastChangeAt, createdAt, updatedAt, lng,
+tags`.
 
 ## Content (sections & entries)
 
@@ -65,6 +69,19 @@ declaration.
 | PATCH | `/resumes/save_entry` | `{resumeId, sectionId, entry}` | **update** an existing entry (send the whole entry object). |
 | PATCH | `/resumes/save_entry` | `{resumeId, sectionId, entry:{id, isHidden:false}, sectionType, sectionDisplayName, sectionIconKey}` | **create** an entry — required extra section-meta fields. If the section doesn't exist yet, this also **creates the section**. New entries append to the bottom. Populate fields with a follow-up update call. |
 | DELETE | `/resumes/delete_entry?resumeId&sectionId&entryId` | — | delete an entry |
+| PATCH | `/resumes/save_entries_order` | `{resumeId, sectionId, newEntriesIdsOrder:[id,…], disableAutoSort:true}` | **reorder entries** within a section (the array order). `disableAutoSort` keeps the manual order (else FlowCV auto-sorts by date). |
+| PATCH | `/resumes/save_section_name` | `{resumeId, sectionId, displayName}` | **rename** a section heading |
+| PATCH | `/resumes/save_section_icon` | `{resumeId, sectionId, iconKey}` | change a section's icon |
+| DELETE | `/resumes/delete_section?resumeId&sectionId` | — | **delete a whole section** and all its entries |
+
+To **hide/show** a single entry, `save_entry` it with `entry.isHidden = true|false`
+(it stays in the resume but is omitted from output). **Reorder sections** by
+writing `customization.sectionOrder.<layout>.sectionsSorted` (a list of section
+ids) via `save_customization` — section order lives in `customization`, keyed per
+column layout (`one`, `two`, `mix`), not in `content`. (`save_section` exists too
+but 500s on every body shape tried; the granular `save_section_*` endpoints above
+are what the app actually uses. `reorder_entries`/`reorder_sections`/`rename_section`
+are all 404 — the real names are `save_entries_order`/`save_section_name`.)
 
 Section meta (`sectionType`, `displayName`, `iconKey`) for creating sections:
 `profile`→(profile, Summary, address-card), `work`→(work, Professional
