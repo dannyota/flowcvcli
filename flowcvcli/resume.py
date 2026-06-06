@@ -23,17 +23,17 @@ class ResumeMixin:
         return env["data"]["resumes"]
 
     # ---- create / duplicate / rename / delete -----------------------------
-    def _create_from(self, title, keep_content):
-        """Create a new resume by cloning the current one's full object.
+    def _create_from(self, title, keep_content, src=None):
+        """Create a new resume by cloning a full resume object.
 
         FlowCV's `create` needs a complete resume object (every NOT-NULL column),
-        so we clone the current resume — guaranteeing validity — then reassign a
-        fresh id/uuid, drop the unique tokens (server regenerates), and set the
-        title. `keep_content=False` makes a blank resume that keeps the same
-        identity (personalDetails) and design (customization); `keep_content=True`
-        is a full duplicate. Returns the new resume id.
+        so we clone a valid one — `src` (defaults to the current resume) — then
+        reassign a fresh id/uuid, drop the unique tokens (server regenerates), and
+        set the title. `keep_content=False` makes a blank resume that keeps the
+        same identity (personalDetails) and design (customization);
+        `keep_content=True` is a full copy. Returns the new resume id.
         """
-        src = self.get_resume()
+        src = self.get_resume() if src is None else src
         clone = json.loads(json.dumps(src))    # deep copy
         new_id = str(uuid.uuid4())
         clone["id"] = new_id
@@ -58,6 +58,19 @@ class ResumeMixin:
         if title is None:
             title = (self.get_resume().get("title") or "Resume") + " (copy)"
         return self._create_from(title, keep_content=True)
+
+    # ---- backup / restore -------------------------------------------------
+    def export_resume(self):
+        """Return the full resume object (for a backup/snapshot)."""
+        return self.get_resume()
+
+    def import_resume(self, resume, title=None):
+        """Restore a previously exported resume object into a NEW resume
+        (non-destructive — the current resume is untouched). Returns the new id.
+        """
+        if title is None:
+            title = (resume.get("title") or "Resume") + " (restored)"
+        return self._create_from(title, keep_content=True, src=resume)
 
     def rename_resume(self, title):
         """PATCH /resumes/rename_resume — set the resume's title."""

@@ -8,16 +8,34 @@ or pass `--resume-id <id>` (any command accepts it).
 import argparse
 import json
 import os
+import re
 import sys
 
 from .api import FlowCV
 from .client import login as do_login, _write_session, _jar_header
-from .content import SECTION_META, label_of
+from .content import SECTION_META, label_of, rich_field
 from .markup import html_to_text, md_to_html
 
-ALIASES = {"title": "jobTitle", "company": "employer", "start": "startDateNew",
-           "end": "endDateNew", "link": "employerLink"}
+# `--set key=value` friendly aliases. `start`/`end` are common to all sections;
+# `title`/`company`/`link` map to different real fields per section, so resolve
+# them section-aware (the old flat map mis-set custom/publication entries).
+_ALIASES_COMMON = {"start": "startDateNew", "end": "endDateNew"}
+_ALIASES_BY_SECTION = {
+    "work":         {"title": "jobTitle", "company": "employer", "link": "employerLink"},
+    "education":    {"title": "degree", "company": "school", "link": "schoolLink"},
+    "publication":  {"title": "title", "company": "publisher", "link": "titleLink"},
+    "organisation": {"title": "position", "company": "organisationName", "link": "organisationLink"},
+    "custom":       {"title": "title", "link": "titleLink"},
+}
 TEXT_FIELDS = ("description", "infoHtml", "text")
+
+
+def _resolve_set_key(section, key):
+    """Map a friendly --set key to the real entry field for `section`."""
+    if key in _ALIASES_COMMON:
+        return _ALIASES_COMMON[key]
+    sec = "custom" if re.fullmatch(r"custom\d+", section or "") else section
+    return _ALIASES_BY_SECTION.get(sec, {}).get(key, key)
 
 
 def _read(file=None, text=None):
@@ -111,8 +129,9 @@ def cmd_add(a):
         if "=" not in kv:
             sys.exit(f"--set expects key=value, got {kv!r}")
         k, _, v = kv.partition("=")
-        sets[ALIASES.get(k, k)] = v
-    new_id = _fc(a).add_entry(a.section, sets=sets, md=_read(a.file, a.text))
+        sets[_resolve_set_key(a.section, k)] = v
+    new_id = _fc(a).add_entry(a.section, sets=sets, md=_read(a.file, a.text),
+                              section_name=a.section_name, section_icon=a.icon)
     print(f"added {a.section} entry -> {new_id}")
 
 
@@ -148,7 +167,24 @@ def cmd_rm_section(a):
 
 
 def cmd_reorder_sections(a):
-    _result(_fc(a).reorder_sections(a.ids, layout=a.layout), f"reorder-sections ({a.layout})")
+    fc = _fc(a)
+    if not a.ids:                                   # no ids -> print current order
+        resume = fc.get_resume()
+        so = (resume.get("customization") or {}).get("sectionOrder") or {}
+        content = resume.get("content") or {}
+        name = lambda sid: (content.get(sid) or {}).get("displayName", "")
+        print(f"section order ({a.layout}):")
+        if a.layout == "two":
+            lay = so.get("two") or {}
+            for side in ("leftSectionsSorted", "rightSectionsSorted"):
+                print(f"  {side}:")
+                for sid in lay.get(side) or []:
+                    print(f"    {sid}  {name(sid)}")
+        else:
+            for sid in (so.get(a.layout) or {}).get("sectionsSorted") or []:
+                print(f"  {sid}  {name(sid)}")
+        return
+    _result(fc.reorder_sections(a.ids, layout=a.layout), f"reorder-sections ({a.layout})")
 
 
 def cmd_field(a):
@@ -157,8 +193,28 @@ def cmd_field(a):
 
 
 def cmd_desc(a):
-    _result(_fc(a).set_description(a.section, a.entry, _read(a.file, a.text), field=a.field),
-            f"{a.section}/{a.entry[:8]}.{a.field}")
+    field = a.field or rich_field(a.section)        # auto: profile->text, skill->infoHtml
+    _result(_fc(a).set_description(a.section, a.entry, _read(a.file, a.text), field=field),
+            f"{a.section}/{a.entry[:8]}.{field}")
+
+
+def cmd_date(a):
+    _result(_fc(a).set_date(a.section, a.entry, year=a.year, month=a.month, day=a.day),
+            f"{a.section}/{a.entry[:8]}.date")
+
+
+def cmd_export(a):
+    out = a.output or "resume-backup.json"
+    with open(out, "w") as f:
+        json.dump(_fc(a).export_resume(), f, indent=2, ensure_ascii=False)
+    print(f"exported resume -> {out} ({os.path.getsize(out)} bytes)")
+
+
+def cmd_import(a):
+    with open(a.file) as f:
+        data = json.load(f)
+    new_id = _fc(a).import_resume(data, title=a.title)
+    print(f"restored backup into a NEW resume -> {new_id} (current resume untouched)")
 
 
 def cmd_pd(a):
@@ -271,7 +327,9 @@ def build_parser():
     s = add("dump"); s.add_argument("section"); s.add_argument("entry"); s.set_defaults(fn=cmd_dump)
 
     s = add("add"); s.add_argument("section")
-    s.add_argument("--set", action="append", help="field=value (aliases: title,company,start,end,link)")
+    s.add_argument("--set", action="append", help="field=value (section-aware aliases: title,company,start,end,link)")
+    s.add_argument("--section-name", help="display name to use if this creates a new section")
+    s.add_argument("--icon", help="icon key to use if this creates a new section, e.g. code")
     g = s.add_mutually_exclusive_group(); g.add_argument("--file"); g.add_argument("--text")
     s.set_defaults(fn=cmd_add)
 
@@ -288,8 +346,9 @@ def build_parser():
     s = add("rm-section"); s.add_argument("section")
     s.add_argument("--yes", action="store_true", help="confirm deleting the section + its entries")
     s.set_defaults(fn=cmd_rm_section)
-    s = add("reorder-sections"); s.add_argument("ids", nargs="+", help="section ids in the desired order")
-    s.add_argument("--layout", default="one", help="column layout to reorder (one|two|mix; default one)")
+    s = add("reorder-sections")
+    s.add_argument("ids", nargs="*", help="section ids in the desired order (omit to print the current order)")
+    s.add_argument("--layout", default="one", help="column layout (one|two|mix; default one)")
     s.set_defaults(fn=cmd_reorder_sections)
 
     s = add("field"); s.add_argument("section"); s.add_argument("entry"); s.add_argument("field")
@@ -297,9 +356,14 @@ def build_parser():
     s.set_defaults(fn=cmd_field)
 
     s = add("desc"); s.add_argument("section"); s.add_argument("entry")
-    s.add_argument("--field", default="description")
+    s.add_argument("--field", default=None,
+                   help="rich-text field (default: auto by section — profile=text, skill=infoHtml, else description)")
     g = s.add_mutually_exclusive_group(required=True); g.add_argument("--file"); g.add_argument("--text")
     s.set_defaults(fn=cmd_desc)
+
+    s = add("date"); s.add_argument("section"); s.add_argument("entry")
+    s.add_argument("--year"); s.add_argument("--month"); s.add_argument("--day")
+    s.set_defaults(fn=cmd_date)
 
     s = add("pd"); s.add_argument("field")
     g = s.add_mutually_exclusive_group(required=True); g.add_argument("--text"); g.add_argument("--file")
@@ -323,6 +387,12 @@ def build_parser():
     add("publish").set_defaults(fn=cmd_publish)
     add("unpublish").set_defaults(fn=cmd_unpublish)
     add("share").set_defaults(fn=cmd_share)
+
+    s = add("export"); s.add_argument("-o", "--output", help="output JSON file (default resume-backup.json)")
+    s.set_defaults(fn=cmd_export)
+    s = add("import"); s.add_argument("file", help="a JSON backup produced by `export`")
+    s.add_argument("--title", help="title for the restored resume (default: '<name> (restored)')")
+    s.set_defaults(fn=cmd_import)
 
     s = add("md2html")
     g = s.add_mutually_exclusive_group(required=True); g.add_argument("--file"); g.add_argument("--text")

@@ -4,6 +4,7 @@
 # fetched resume data & backups (contain personal info)
 resume_raw.json
 backup_resume_*.json
+resume-backup*.json
 # python
 __pycache__/
 *.pyc

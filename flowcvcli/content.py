@@ -7,6 +7,7 @@ read-modify-write where the API replaces the whole entry; create uses
 
 Mixes into Client; uses self.get_resume / self.request / self.resume_id.
 """
+import re
 import uuid
 
 from .markup import md_to_html
@@ -21,6 +22,15 @@ SECTION_META = {
     "organisation": ("organisation", "Organisations", "house-user"),
     "custom1": ("custom", "Custom", "star"),
 }
+
+# Per-section rich-text field: most sections store rich text in `description`,
+# but the summary uses `text` and skills use `infoHtml`.
+RICH_TEXT_FIELD = {"profile": "text", "skill": "infoHtml"}
+
+
+def rich_field(section):
+    """The entry field that holds rich text for `section` (default 'description')."""
+    return RICH_TEXT_FIELD.get(section, "description")
 
 
 def label_of(entry):
@@ -65,12 +75,14 @@ class ContentMixin:
         return self.request("resumes/delete_entry", method="DELETE", query=query)
 
     # ---- high-level helpers ----------------------------------------------
-    def add_entry(self, section, sets=None, md=None):
+    def add_entry(self, section, sets=None, md=None, section_name=None, section_icon=None):
         """Create an entry (and the section if needed); return the new id.
 
-        `sets` are entry fields to populate; `md` becomes a `description`
-        HTML field. Creates the entry first (so a missing section is made),
-        then fills it with a follow-up update.
+        `sets` are entry fields to populate; `md` becomes the section's rich-text
+        field. Creates the entry first (so a missing section is made), then fills
+        it with a follow-up update. When the section is created, `section_name`
+        and `section_icon` override its default heading/icon (no follow-up
+        rename-section / section-icon needed).
         """
         resume = self.get_resume()
         existing = (resume.get("content") or {}).get(section)
@@ -80,8 +92,17 @@ class ContentMixin:
             icon_key = existing.get("iconKey")
         elif section in SECTION_META:
             section_type, display_name, icon_key = SECTION_META[section]
+        elif re.fullmatch(r"custom\d+", section):
+            # FlowCV supports multiple custom sections (custom1, custom2, …);
+            # only custom1 is pre-declared in SECTION_META. Create any other
+            # customN as a generic custom section.
+            section_type, display_name, icon_key = "custom", "Custom", "star"
         else:
             raise SystemExit(f"unknown section (no meta): {section}")
+        if section_name is not None:
+            display_name = section_name
+        if section_icon is not None:
+            icon_key = section_icon
 
         new_id = str(uuid.uuid4())
         # Create: minimal entry + section meta (also creates the section).
@@ -98,9 +119,7 @@ class ContentMixin:
                  "createdAt": now, "updatedAt": now}
         entry.update(sets or {})
         if md:
-            # rich text lives in a section-specific field (profile->text, skill->infoHtml)
-            field = {"profile": "text", "skill": "infoHtml"}.get(section, "description")
-            entry[field] = md_to_html(md)
+            entry[rich_field(section)] = md_to_html(md)
         env = self.save_entry(section, entry)
         if not env.get("success"):
             raise SystemExit(f"created {section} entry {new_id} but failed to populate it: {env}")
@@ -115,9 +134,30 @@ class ContentMixin:
             entry["updatedAt"] = self.now_iso()
         return self.save_entry(section, entry)
 
-    def set_description(self, section, entry_id, md, field="description"):
-        """Set a rich-text field to md_to_html(md) on an entry."""
-        return self.set_field(section, entry_id, field, md_to_html(md))
+    def set_description(self, section, entry_id, md, field=None):
+        """Set a rich-text field to md_to_html(md) on an entry. When `field` is
+        omitted, it defaults to the section's rich-text field (profile->text,
+        skill->infoHtml, else description)."""
+        return self.set_field(section, entry_id, field or rich_field(section), md_to_html(md))
+
+    def set_date(self, section, entry_id, year=None, month=None, day=None):
+        """Set an entry's structured `date` object (used by publications, etc.).
+
+        Merges into the existing date; month/day left unset are hidden, so
+        `set_date(..., year=2018)` renders as a year-only date.
+        """
+        resume = self.get_resume()
+        entry = dict(self.find_entry(resume, section, entry_id))
+        date = dict(entry.get("date") or {})
+        date["year"] = "" if year is None else str(year)
+        date["month"] = "" if month is None else str(month)
+        date["day"] = "" if day is None else str(day)
+        date["hideMonth"] = month is None
+        date["hideDay"] = day is None
+        entry["date"] = date
+        if "updatedAt" in entry:
+            entry["updatedAt"] = self.now_iso()
+        return self.save_entry(section, entry)
 
     def hide_entry(self, section, entry_id, hidden=True):
         """Show/hide an entry (sets its `isHidden`). Hidden entries stay in the
