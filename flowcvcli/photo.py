@@ -44,6 +44,7 @@ def image_size(data):
 class PhotoMixin:
     def upload_photo(self, data):
         """Upload image bytes to upload_profile_pic; return the imageId string."""
+        self._ensure_auth()                       # opener attaches the session cookies
         b = "----flowcvcli" + uuid.uuid4().hex
         body = (
             f"--{b}\r\nContent-Disposition: form-data; name=\"resumeId\"\r\n\r\n{self.resume_id}\r\n"
@@ -53,9 +54,9 @@ class PhotoMixin:
         req = urllib.request.Request(
             f"{API}/resumes/upload_profile_pic", data=body, method="POST",
             headers={"accept": "application/json", "user-agent": UA, "origin": ORIGIN,
-                     "cookie": self.cookie(), "content-type": f"multipart/form-data; boundary={b}"})
+                     "content-type": f"multipart/form-data; boundary={b}"})
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with self._opener.open(req, timeout=60) as r:
                 env = json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
             env = json.loads(e.read().decode())

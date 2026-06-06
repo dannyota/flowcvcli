@@ -11,7 +11,7 @@ import os
 import sys
 
 from .api import FlowCV
-from .client import login as do_login, _write_session
+from .client import login as do_login, _write_session, _jar_header
 from .content import SECTION_META, label_of
 from .markup import html_to_text, md_to_html
 
@@ -51,7 +51,7 @@ def cmd_login(a):
     fc = _fc(a)
     if not (fc.cfg.email and fc.cfg.password):
         sys.exit("Set FLOWCV_EMAIL and FLOWCV_PASSWORD in .env to use `login`.")
-    _write_session(do_login(fc.cfg.email, fc.cfg.password))
+    _write_session(_jar_header(do_login(fc.cfg.email, fc.cfg.password)))
     print("login ok -> session cached to .flowcv_session")
 
 
