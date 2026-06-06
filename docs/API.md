@@ -13,11 +13,12 @@ returns `code:500` (handler ran, validation failed) — useful for probing.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
-| GET | `/auth/init_user` | — | seeds an (anonymous) session cookie; call before login |
-| POST | `/auth/login` | `multipart/form-data`: `email`, `password` (+ empty `resumeData=undefined`, `letterData=undefined`, `resumeImg`, `letterImg`) | sets `flowcvsidapp` cookie on success. Rate-limited ~100/day. |
+| GET | `/auth/init_user` | — | seeds an (anonymous) session cookie. The web app calls it before login, but it is **optional** — login works standalone (the browser request skips it). |
+| POST | `/auth/login` | `multipart/form-data`: `email`, `password` (+ empty `resumeData=undefined`, `letterData=undefined`, `resumeImg`, `letterImg`) | sets `flowcvsidapp` cookie on success. **Rate-limited per source IP** (≈100/day) — exhausting it on one machine doesn't affect another. |
 
-Login flow: GET `init_user` (cookie jar) → POST `login` (same jar) → the jar now
-holds the authenticated `flowcvsidapp`.
+Login flow: (optionally GET `init_user` for an anonymous session) → POST `login`
+on the same cookie jar → the jar now holds the authenticated `flowcvsidapp`.
+`init_user` is best-effort; a failure there must not block the login.
 
 ## Resumes (resume-level)
 

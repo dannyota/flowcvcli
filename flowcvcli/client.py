@@ -96,22 +96,29 @@ def login(email, password, jar=None):
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     base = {"user-agent": UA, "origin": ORIGIN, "accept": "application/json, text/plain, */*"}
 
-    def _open(req):
-        try:
-            return opener.open(req, timeout=30)
-        except urllib.error.HTTPError as e:
-            if e.code == 429:
-                raise SystemExit(_rate_limit_msg("POST", "auth/login"))
-            raise SystemExit(f"login failed: HTTP {e.code} {e.read()[:200]!r}")
-        except urllib.error.URLError as e:
-            raise SystemExit(f"login -> network error: {e.reason}")
+    # Seed an anonymous session like the web app does — but login also works
+    # standalone (the browser's curl skips this), so a throttled/failed init_user
+    # must NOT abort a login that would otherwise succeed. Best-effort only.
+    try:
+        opener.open(urllib.request.Request(f"{API}/auth/init_user", headers=base), timeout=30).read()
+    except urllib.error.HTTPError:
+        pass
+    except urllib.error.URLError as e:
+        raise SystemExit(f"login (init_user) -> network error: {e.reason}")
 
-    _open(urllib.request.Request(f"{API}/auth/init_user", headers=base)).read()
     boundary, body = _multipart({"email": email, "password": password,
                                  "resumeData": "undefined", "letterData": "undefined",
                                  "resumeImg": "", "letterImg": ""})
     h = dict(base, **{"content-type": f"multipart/form-data; boundary={boundary}"})
-    resp = _open(urllib.request.Request(f"{API}/auth/login", data=body, headers=h, method="POST"))
+    try:
+        resp = opener.open(
+            urllib.request.Request(f"{API}/auth/login", data=body, headers=h, method="POST"), timeout=30)
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            raise SystemExit(_rate_limit_msg("POST", "auth/login"))
+        raise SystemExit(f"login failed: HTTP {e.code} {e.read()[:200]!r}")
+    except urllib.error.URLError as e:
+        raise SystemExit(f"login -> network error: {e.reason}")
     data = json.loads(resp.read().decode())
     if not data.get("success"):
         raise SystemExit(f"login failed: {json.dumps(data)[:200]}")
