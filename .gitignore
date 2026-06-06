@@ -8,6 +8,11 @@ backup_resume_*.json
 __pycache__/
 *.pyc
 .flowcv_session
+# build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
 # playwright screenshots/snapshots (contain resume content)
 .playwright-mcp/
 # generated content fragments / exports

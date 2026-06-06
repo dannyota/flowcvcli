@@ -121,7 +121,8 @@ def login(email, password, jar=None):
         raise SystemExit(f"login -> network error: {e.reason}")
     data = json.loads(resp.read().decode())
     if not data.get("success"):
-        raise SystemExit(f"login failed: {json.dumps(data)[:200]}")
+        # whitelist error/code only — the raw envelope can echo the account email
+        raise SystemExit(f"login failed (code {data.get('code')}): {data.get('error') or 'check email/password'}")
     if not any(c.name == "flowcvsidapp" for c in jar):
         raise SystemExit("login succeeded but no session cookie was set")
     return jar
@@ -129,6 +130,9 @@ def login(email, password, jar=None):
 
 def _write_session(cookie):
     """Persist the session cookie header with owner-only perms (0o600) — it's a credential."""
+    parent = os.path.dirname(SESSION_FILE)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     fd = os.open(SESSION_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(cookie)
@@ -291,6 +295,6 @@ class Client:
         if not env.get("success") and env.get("reloadClient"):
             env = self.request(f"resumes/{self.resume_id}")   # session-warmup retry
         if not env.get("success"):
-            raise SystemExit(f"get resume failed: {json.dumps(env)[:200]} "
+            raise SystemExit(f"get resume failed (code {env.get('code')}): {env.get('error') or ''} "
                              "(session expired? refresh FLOWCV_COOKIE or re-login)")
         return env["data"]["resume"]

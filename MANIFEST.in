@@ -1,0 +1,9 @@
+include LICENSE
+include README.md
+include .env.example
+recursive-include docs *.md
+
+# never ship local/dev artifacts or anything with personal data
+exclude flowcv.py
+prune .playwright-mcp
+global-exclude *.pyc __pycache__ .env .flowcv_env .flowcv_session *.pdf *.html

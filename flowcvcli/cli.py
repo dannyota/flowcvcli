@@ -108,6 +108,8 @@ def cmd_dump(a):
 def cmd_add(a):
     sets = {}
     for kv in a.set or []:
+        if "=" not in kv:
+            sys.exit(f"--set expects key=value, got {kv!r}")
         k, _, v = kv.partition("=")
         sets[ALIASES.get(k, k)] = v
     new_id = _fc(a).add_entry(a.section, sets=sets, md=_read(a.file, a.text))
@@ -160,7 +162,7 @@ def cmd_desc(a):
 
 
 def cmd_pd(a):
-    _result(_fc(a).set_personal_field(a.field, a.text), f"personalDetails.{a.field}")
+    _result(_fc(a).set_personal_field(a.field, _read(a.file, a.text)), f"personalDetails.{a.field}")
 
 
 def cmd_links(a):
@@ -221,7 +223,7 @@ def cmd_download(a):
             f.write(data)
         print(f"saved {out} ({len(data)} bytes)")
     else:
-        path = fc.save_pdf(a.output or "resume.pdf", pages=a.pages)
+        path = fc.save_pdf(a.output or "resume.pdf")
         print(f"saved {path} ({os.path.getsize(path)} bytes)")
 
 
@@ -299,7 +301,9 @@ def build_parser():
     g = s.add_mutually_exclusive_group(required=True); g.add_argument("--file"); g.add_argument("--text")
     s.set_defaults(fn=cmd_desc)
 
-    s = add("pd"); s.add_argument("field"); s.add_argument("--text", required=True); s.set_defaults(fn=cmd_pd)
+    s = add("pd"); s.add_argument("field")
+    g = s.add_mutually_exclusive_group(required=True); g.add_argument("--text"); g.add_argument("--file")
+    s.set_defaults(fn=cmd_pd)
 
     add("links").set_defaults(fn=cmd_links)
     s = add("link"); s.add_argument("key"); s.add_argument("display"); s.add_argument("url"); s.set_defaults(fn=cmd_link)
@@ -313,7 +317,7 @@ def build_parser():
     s.add_argument("--force", action="store_true", help="apply even a paid template (needs a subscription)")
     s.set_defaults(fn=cmd_apply_template)
 
-    s = add("download"); s.add_argument("-o", "--output"); s.add_argument("--pages", type=int, default=10)
+    s = add("download"); s.add_argument("-o", "--output")
     s.add_argument("--token", help="download a public resume by its share token (no auth)")
     s.set_defaults(fn=cmd_download)
     add("publish").set_defaults(fn=cmd_publish)
