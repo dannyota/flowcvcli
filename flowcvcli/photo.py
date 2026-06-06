@@ -8,10 +8,13 @@ Display is toggled via the customization delta `header.photo.show`.
 Depends on PersonalMixin (_pd / save_personal) and CustomizationMixin (set).
 """
 import json
+import os
 import struct
 import urllib.error
 import urllib.request
 import uuid
+
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 from .client import API, ORIGIN, UA
 
@@ -61,13 +64,18 @@ class PhotoMixin:
         return env["data"]["imageId"]
 
     def set_photo(self, src, shape="round"):
-        """Set the header photo from a URL (http...) or local file path. Returns env."""
-        if src.startswith("http"):
-            with urllib.request.urlopen(urllib.request.Request(src, headers={"user-agent": UA}), timeout=60) as r:
-                data = r.read()
-        else:
+        """Set the header photo from a local file path or an http(s) URL. Returns env."""
+        if os.path.exists(src):                       # a real file wins (e.g. http_avatar.png)
             with open(src, "rb") as f:
-                data = f.read()
+                data = f.read(MAX_IMAGE_BYTES + 1)
+        elif src.startswith(("http://", "https://")):
+            with urllib.request.urlopen(
+                    urllib.request.Request(src, headers={"user-agent": UA}), timeout=60) as r:
+                data = r.read(MAX_IMAGE_BYTES + 1)
+        else:
+            raise SystemExit(f"photo source not found (not a file or http(s) URL): {src!r}")
+        if len(data) > MAX_IMAGE_BYTES:
+            raise SystemExit("photo too large (> 10 MB)")
         image_id = self.upload_photo(data)
         w, h = image_size(data)
         pd = self._pd()
@@ -78,7 +86,9 @@ class PhotoMixin:
         return env
 
     def remove_photo(self):
-        """Clear the header photo."""
+        """Clear the header photo and hide the photo slot."""
         pd = self._pd()
         pd["photo"] = {}
-        return self.save_personal(pd)
+        env = self.save_personal(pd)
+        self.set("header.photo.show", False)
+        return env

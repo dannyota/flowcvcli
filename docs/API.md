@@ -30,7 +30,7 @@ holds the authenticated `flowcvsidapp`.
 | PATCH | `/resumes/rename_resume` | `{resumeId, …}` exists (body shape TODO — not `{title}`) | rename |
 | PATCH | `/resumes/publish_web_resume` | `{publish: bool, resumeId}` | toggle the public web resume |
 | GET | `/resumes/download?resumeId={id}&previewPageCount={n}` | — | **PDF bytes** (`application/pdf`). `previewPageCount` does not truncate; any value returns the full doc. |
-| GET | `/public/download_resume?token={webToken}` | — | **public** PDF of any *shared* resume by its web token — no auth/ownership needed. |
+| GET | `/api/public/download_resume?token={webToken}` | — | **public** PDF of any *shared* resume by its web token — no auth/ownership needed. (Only when the resume's download is enabled; otherwise 400.) |
 | DELETE | `/resumes/delete_entry?resumeId&sectionId&entryId` | — | delete a content entry (see below) |
 
 The full-resume GET also exposes `webToken` (public URL

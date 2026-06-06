@@ -65,7 +65,8 @@ class CustomizationMixin:
         its full `customization` and the resume's current `personalDetails`.
         Raises SystemExit if no template matches `template_id`.
         """
-        tpl = next((t for t in self.list_templates() if t.get("id") == template_id), None)
+        tpl = next((t for t in self.list_templates()
+                    if isinstance(t, dict) and (t.get("id") or t.get("templateId")) == template_id), None)
         if tpl is None:
             raise SystemExit(f"template not found: {template_id!r}")
         body = {

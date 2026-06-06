@@ -11,8 +11,7 @@ import os
 import sys
 
 from .api import FlowCV
-from .client import login as do_login
-from .config import SESSION_FILE
+from .client import login as do_login, _write_session
 from .content import SECTION_META, label_of
 from .markup import html_to_text, md_to_html
 
@@ -52,8 +51,7 @@ def cmd_login(a):
     fc = _fc(a)
     if not (fc.cfg.email and fc.cfg.password):
         sys.exit("Set FLOWCV_EMAIL and FLOWCV_PASSWORD in .env to use `login`.")
-    with open(SESSION_FILE, "w") as f:
-        f.write(do_login(fc.cfg.email, fc.cfg.password))
+    _write_session(do_login(fc.cfg.email, fc.cfg.password))
     print("login ok -> session cached to .flowcv_session")
 
 
@@ -179,8 +177,9 @@ def cmd_download(a):
 
 
 def cmd_publish(a):
-    _result(_fc(a).publish(), "publish")
-    print(f"  {_fc(a).share_url()}")
+    fc = _fc(a)
+    _result(fc.publish(), "publish")
+    print(f"  {fc.share_url()}")
 
 
 def cmd_unpublish(a):

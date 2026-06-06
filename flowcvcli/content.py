@@ -85,11 +85,13 @@ class ContentMixin:
 
         new_id = str(uuid.uuid4())
         # Create: minimal entry + section meta (also creates the section).
-        self.save_entry(section, {"id": new_id, "isHidden": False}, extra={
+        env = self.save_entry(section, {"id": new_id, "isHidden": False}, extra={
             "sectionType": section_type,
             "sectionDisplayName": display_name,
             "sectionIconKey": icon_key,
         })
+        if not env.get("success"):
+            raise SystemExit(f"could not create {section} entry: {env}")
 
         now = self.now_iso()
         entry = {"id": new_id, "isHidden": False, "showPlaceholder": False,
@@ -99,7 +101,9 @@ class ContentMixin:
             # rich text lives in a section-specific field (profile->text, skill->infoHtml)
             field = {"profile": "text", "skill": "infoHtml"}.get(section, "description")
             entry[field] = md_to_html(md)
-        self.save_entry(section, entry)
+        env = self.save_entry(section, entry)
+        if not env.get("success"):
+            raise SystemExit(f"created {section} entry {new_id} but failed to populate it: {env}")
         return new_id
 
     def set_field(self, section, entry_id, field, value):

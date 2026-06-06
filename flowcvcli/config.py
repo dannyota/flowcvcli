@@ -13,7 +13,9 @@ def _load_dotenv():
             continue
         with open(path) as f:
             for line in f:
-                line = line.rstrip("\r\n")            # tolerate CRLF (.env edited on Windows)
+                line = line.rstrip("\r\n").strip()    # tolerate CRLF (.env edited on Windows)
+                if line.startswith("export "):        # tolerate `export KEY=val`
+                    line = line[len("export "):]
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)          # split first '='; cookie may contain '='
                     v = v.strip()

@@ -41,7 +41,7 @@ def md_to_html(md):
         flush()
         if line.startswith("## "):
             parts.append(f"<p{J}><strong>{html.escape(line[3:].strip(), quote=False)}</strong></p>")
-        elif len(line) > 4 and line.startswith("**") and line.endswith("**"):
+        elif len(line) > 4 and line.startswith("**") and line.endswith("**") and line.count("**") == 2:
             parts.append(f"<p{J}><strong>{html.escape(line[2:-2].strip(), quote=False)}</strong></p>")
         else:
             parts.append(f"<p{J}>{_esc(line)}</p>")

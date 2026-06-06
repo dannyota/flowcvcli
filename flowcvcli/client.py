@@ -62,6 +62,13 @@ def login(email, password):
     return cookie
 
 
+def _write_session(cookie):
+    """Persist the session cookie with owner-only perms (0o600) — it's a credential."""
+    fd = os.open(SESSION_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(cookie)
+
+
 class Client:
     def __init__(self, config=None, resume_id=None):
         self.cfg = config or Config.load()
@@ -75,11 +82,11 @@ class Client:
             return self._cookie
         c = self.cfg.cookie
         if not c and os.path.exists(SESSION_FILE):
-            c = open(SESSION_FILE).read().strip() or None
+            with open(SESSION_FILE) as f:
+                c = f.read().strip() or None
         if not c and self.cfg.email and self.cfg.password:
             c = login(self.cfg.email, self.cfg.password)
-            with open(SESSION_FILE, "w") as f:
-                f.write(c)
+            _write_session(c)
         if not c:
             raise SystemExit("No auth. Set FLOWCV_COOKIE, or FLOWCV_EMAIL + "
                              "FLOWCV_PASSWORD, in .env.")
@@ -94,8 +101,7 @@ class Client:
         except OSError:
             pass
         self._cookie = login(self.cfg.email, self.cfg.password)
-        with open(SESSION_FILE, "w") as f:
-            f.write(self._cookie)
+        _write_session(self._cookie)
         return True
 
     @property
@@ -109,11 +115,11 @@ class Client:
         if resumes is None:
             raise SystemExit("Could not list resumes to auto-select one — set "
                              "FLOWCV_RESUME_ID or pass --resume-id.")
-        if len(resumes) == 1:
-            self.cfg.resume_id = resumes[0]["id"]   # cache for the rest of the run
-            return self.cfg.resume_id
         if not resumes:
             raise SystemExit("This account has no resumes yet.")
+        if len(resumes) == 1:
+            self.cfg.resume_id = resumes[0].get("id")   # cache for the rest of the run
+            return self.cfg.resume_id
         listing = "\n".join(f"  {r.get('id')}  {r.get('title') or '(untitled)'}" for r in resumes)
         raise SystemExit("You have multiple resumes — choose one with --resume-id <id> "
                          "or FLOWCV_RESUME_ID:\n" + listing)
