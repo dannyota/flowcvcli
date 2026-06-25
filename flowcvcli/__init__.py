@@ -5,4 +5,4 @@ from .content import SECTION_META, label_of
 from .markup import html_to_text, md_to_html
 
 __all__ = ["FlowCV", "Config", "SECTION_META", "label_of", "md_to_html", "html_to_text"]
-__version__ = "0.5.2"
+__version__ = "0.6.0"

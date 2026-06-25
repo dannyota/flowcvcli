@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "flowcvcli"
 dynamic = ["version"]
-description = "Control a FlowCV resume from the command line or Python — content, design, templates, photo, publish and PDF export — via FlowCV's private JSON API. Zero dependencies."
+description = "Control a FlowCV resume from the command line or Python — content, design, templates, photo, publish and PDF export — via FlowCV's private JSON API."
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
@@ -28,7 +28,10 @@ classifiers = [
     "Topic :: Office/Business",
     "Topic :: Utilities",
 ]
-dependencies = []
+# curl_cffi presents a browser TLS (JA3) fingerprint for the login POST only —
+# FlowCV's edge throttles Python's stdlib `ssl` fingerprint on /auth/login with
+# HTTP 429 while accepting browsers/curl. All other calls use the stdlib.
+dependencies = ["curl_cffi>=0.7"]
 
 [project.scripts]
 flowcv = "flowcvcli.cli:main"

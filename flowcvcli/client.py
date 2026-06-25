@@ -35,6 +35,76 @@ COOKIE_DOMAIN = "app.flowcv.com"
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/149.0.0.0 Safari/537.36")
 
+# The web app always carries an `appVersion` build-hash cookie and an `i18n`
+# locale cookie, and the API expects them on requests, so we send them on login
+# and persist them with the session. (They are NOT what fixes the login 429 —
+# that's the TLS fingerprint; see `_impersonated_login`.)
+#
+# `appVersion` is a build hash that changes on every FlowCV deploy, so we DON'T
+# hard-code it: we GET the app root and capture the `Set-Cookie: appVersion=...`
+# the server emits (exactly how the browser gets it). The constant below is only
+# a last-resort fallback if that fetch fails; FLOWCV_APP_VERSION overrides both.
+APP_VERSION_FALLBACK = "a66cb813d07308dcd4b0332278e3f9a2fcef0bb5"
+I18N_COOKIE = os.environ.get("FLOWCV_I18N", "en|vn")
+
+
+def fetch_app_version():
+    """GET the app root and return the current `appVersion` build hash.
+
+    The browser obtains `appVersion` from the Set-Cookie on the first page load;
+    we mirror that so the value is always current rather than pinned to a stale
+    build hash. Returns the captured value, or None if the fetch failed. This is
+    a plain GET (not the login POST), so it isn't subject to the WAF throttling.
+    """
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    try:
+        opener.open(urllib.request.Request(ORIGIN + "/", headers={"user-agent": UA}),
+                    timeout=30).read()
+    except (urllib.error.HTTPError, urllib.error.URLError):
+        return None
+    for c in jar:
+        if c.name == "appVersion":
+            return c.value
+    return None
+
+
+def resolve_app_version():
+    """The appVersion to send on login: env override > live fetch > pinned fallback."""
+    return (os.environ.get("FLOWCV_APP_VERSION")
+            or fetch_app_version()
+            or APP_VERSION_FALLBACK)
+
+
+def _impersonated_login(email, password, send_cookies):
+    """POST /auth/login with a Chrome TLS fingerprint; return (status, body, cookies).
+
+    FlowCV's edge fingerprints the TLS ClientHello (JA3) and throttles Python's
+    `ssl` stack on the login endpoint — every stdlib client (urllib, http.client)
+    gets an application-level HTTP 429, while curl and real browsers from the SAME
+    ip/headers/cookies/moment are accepted. Verified end to end: byte-identical
+    headers+ordering via http.client 429s, and Python login even WITH a valid
+    session cookie 429s, while a browser fetch with that same session 200s. So the
+    fix is to present a browser TLS fingerprint, which `curl_cffi` does in pure
+    Python (libcurl-impersonate) — no subprocess, no system curl.
+
+    `send_cookies` is the {name: value} cookie dict to send (appVersion/i18n).
+    Returns (status, response_text, {name: value} of cookies the server set).
+    Raises ImportError if curl_cffi is not installed (the caller surfaces it).
+    """
+    from curl_cffi import requests as _cffi   # lazy: only login needs it
+
+    boundary, body = _multipart({"email": email, "password": password,
+                                 "resumeData": "undefined", "letterData": "undefined",
+                                 "resumeImg": "", "letterImg": ""})
+    r = _cffi.post(
+        ORIGIN + "/api/auth/login",
+        headers={"accept": "application/json, text/plain, */*",
+                 "content-type": f"multipart/form-data; boundary={boundary}",
+                 "origin": ORIGIN},
+        cookies=send_cookies, data=body, impersonate="chrome", timeout=60)
+    return r.status_code, r.text, dict(r.cookies)
+
 
 def now_iso():
     n = datetime.datetime.now(datetime.timezone.utc)
@@ -84,45 +154,54 @@ def _rate_limit_msg(method, path):
 
 
 def login(email, password, jar=None):
-    """POST /auth/login (multipart email+password) into a cookie jar.
+    """Authenticate and load the full session cookie set into a cookie jar.
 
-    Seeds an anonymous session (init_user) then logs in on the *same* jar, so the
-    jar ends up holding the full authenticated cookie set. Returns the jar
-    (creating a fresh one if not supplied). Raises SystemExit with a clear message
-    on a 429 rate-limit or a failed login.
+    FlowCV's edge fingerprints the TLS ClientHello (JA3) and throttles Python's
+    `ssl` on the login endpoint — every stdlib client (urllib, http.client) gets
+    an application-level HTTP 429, while curl and real browsers from the SAME
+    ip/headers/cookies/moment are accepted. Verified empirically: byte-identical
+    headers+ordering via http.client 429s, Python login even WITH a valid session
+    cookie 429s, and a browser fetch with that same session 200s. So we send the
+    login POST with a Chrome TLS fingerprint via curl_cffi (see
+    `_impersonated_login`) and capture the session cookies. Every OTHER call stays
+    on urllib — only the login endpoint is fingerprint-gated.
+
+    Returns the jar (creating a fresh one if not supplied), populated with the
+    session cookie plus the `appVersion`/`i18n` cookies the API expects on every
+    later request. Raises SystemExit on a 429, a missing curl_cffi, or a failed
+    login.
     """
     if jar is None:
         jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-    base = {"user-agent": UA, "origin": ORIGIN, "accept": "application/json, text/plain, */*"}
 
-    # Seed an anonymous session like the web app does — but login also works
-    # standalone (the browser's curl skips this), so a throttled/failed init_user
-    # must NOT abort a login that would otherwise succeed. Best-effort only.
-    try:
-        opener.open(urllib.request.Request(f"{API}/auth/init_user", headers=base), timeout=30).read()
-    except urllib.error.HTTPError:
-        pass
-    except urllib.error.URLError as e:
-        raise SystemExit(f"login (init_user) -> network error: {e.reason}")
+    # Browser-style cookies the API expects: live appVersion build-hash + locale.
+    appver = resolve_app_version()
+    jar.set_cookie(_make_cookie("i18n", I18N_COOKIE))
+    jar.set_cookie(_make_cookie("appVersion", appver))
 
-    boundary, body = _multipart({"email": email, "password": password,
-                                 "resumeData": "undefined", "letterData": "undefined",
-                                 "resumeImg": "", "letterImg": ""})
-    h = dict(base, **{"content-type": f"multipart/form-data; boundary={boundary}"})
     try:
-        resp = opener.open(
-            urllib.request.Request(f"{API}/auth/login", data=body, headers=h, method="POST"), timeout=30)
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
-            raise SystemExit(_rate_limit_msg("POST", "auth/login"))
-        raise SystemExit(f"login failed: HTTP {e.code} {e.read()[:200]!r}")
-    except urllib.error.URLError as e:
-        raise SystemExit(f"login -> network error: {e.reason}")
-    data = json.loads(resp.read().decode())
-    if not data.get("success"):
-        # whitelist error/code only — the raw envelope can echo the account email
-        raise SystemExit(f"login failed (code {data.get('code')}): {data.get('error') or 'check email/password'}")
+        status, info, set_cookies = _impersonated_login(
+            email, password, {"i18n": I18N_COOKIE, "appVersion": appver})
+    except ImportError:
+        raise SystemExit(
+            "login needs the 'curl_cffi' package: FlowCV throttles Python's TLS "
+            "fingerprint on the login endpoint, and curl_cffi presents a browser "
+            "one. Install it (`pip install curl_cffi`), or set FLOWCV_COOKIE to a "
+            "session cookie captured from a logged-in browser.")
+    if status == 429:
+        raise SystemExit(_rate_limit_msg("POST", "auth/login"))
+    if status != 200:
+        raise SystemExit(f"login failed: HTTP {status} {info[:200]!r}")
+    try:
+        data = json.loads(info)
+    except ValueError:
+        data = {}
+    if data and not data.get("success"):
+        raise SystemExit(f"login failed (code {data.get('code')}): "
+                         f"{data.get('error') or 'check email/password'}")
+
+    for name, value in set_cookies.items():
+        jar.set_cookie(_make_cookie(name, value))
     if not any(c.name == "flowcvsidapp" for c in jar):
         raise SystemExit("login succeeded but no session cookie was set")
     return jar
