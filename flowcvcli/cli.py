@@ -18,7 +18,11 @@ import datetime
 import json
 import os
 import re
+import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 
 from . import __version__
 from .api import FlowCV
@@ -27,7 +31,8 @@ from .config import (Config, dotenv_files_found, resolve_auth_source,
                      session_file_info)
 from .errors import FlowCVError
 from .content import SECTION_META, label_of, rich_field
-from .markup import html_to_text, md_to_html
+from .jsonresume import from_jsonresume, to_jsonresume
+from .markup import html_to_md, html_to_text, md_to_html
 
 # `--set key=value` friendly aliases. `start`/`end` are common to all sections;
 # `title`/`company`/`link` map to different real fields per section, so resolve
@@ -41,6 +46,17 @@ _ALIASES_BY_SECTION = {
     "custom":       {"title": "title", "link": "titleLink"},
 }
 TEXT_FIELDS = ("description", "infoHtml", "text")
+
+# Known-good section `iconKey`s: the icons SECTION_META already uses, unioned with
+# a hand-verified FlowCV set. Any FontAwesome-style key may work — this is just the
+# commonly-used set surfaced by `flowcv icons`.
+_VERIFIED_ICONS = (
+    "address-card", "briefcase", "graduation-cap", "head-side-brain", "newspaper",
+    "house-user", "star", "code", "wrench", "trophy", "certificate", "language",
+    "heart", "lightbulb", "users", "globe", "book", "flask", "chart-line",
+    "shield-check",
+)
+ICON_KEYS = sorted(set(_VERIFIED_ICONS) | {m[2] for m in SECTION_META.values()})
 
 
 def _resolve_set_key(section, key):
@@ -269,6 +285,34 @@ def cmd_desc(a):
             f"{a.section}/{a.entry[:8]}.{field}")
 
 
+def cmd_edit(a):
+    """Open the entry's rich text as markdown in $EDITOR; save back on change."""
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    if not editor:
+        sys.exit("no editor set — export EDITOR (or VISUAL) to use `edit`.")
+    fc = _fc(a)
+    field = a.field or rich_field(a.section)
+    entry = fc.find_entry(fc.get_resume(), a.section, a.entry)
+    original = html_to_md(entry.get(field) or "")
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, f"{a.section}-{a.entry[:8]}.md")
+    try:
+        with open(path, "w") as f:
+            f.write(original)
+        rc = subprocess.call(shlex.split(editor) + [path])
+        if rc != 0:                                  # user aborted -> no API call
+            sys.exit(f"editor exited with status {rc}; aborting (no changes saved).")
+        with open(path) as f:
+            edited = f.read()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if edited.strip() == original.strip():           # ignore trailing-whitespace noise
+        _emit({"changed": False}, lambda: print("no changes."))
+        return
+    _result(fc.set_description(a.section, a.entry, edited, field=field),
+            f"{a.section}/{a.entry[:8]}.{field}")
+
+
 def cmd_date(a):
     if not (a.year or a.month or a.day or a.clear):
         sys.exit("nothing to change: pass --year/--month/--day, or --clear to reset the date.")
@@ -278,17 +322,27 @@ def cmd_date(a):
 
 
 def cmd_export(a):
-    out = a.output or "resume-backup.json"
+    fc = _fc(a)
+    if a.format == "jsonresume":
+        data = to_jsonresume(fc.export_resume())
+        out = a.output or "resume.jsonresume.json"
+    else:
+        data = fc.export_resume()
+        out = a.output or "resume-backup.json"
     with open(out, "w") as f:
-        json.dump(_fc(a).export_resume(), f, indent=2, ensure_ascii=False)
+        json.dump(data, f, indent=2, ensure_ascii=False)
     n = os.path.getsize(out)
     _emit({"saved": out, "bytes": n}, lambda: print(f"exported resume -> {out} ({n} bytes)"))
 
 
 def cmd_import(a):
+    fc = _fc(a)
     with open(a.file) as f:
         data = json.load(f)
-    new_id = _fc(a).import_resume(data, title=a.title)
+    if a.format == "jsonresume":
+        # overlay the JSON Resume doc onto the current resume (identity/design base)
+        data = from_jsonresume(data, base=fc.get_resume())
+    new_id = fc.import_resume(data, title=a.title)
     _emit({"id": new_id, "success": True},
           lambda: print(f"restored backup into a NEW resume -> {new_id} (current resume untouched)"))
 
@@ -315,8 +369,48 @@ def cmd_unlink(a):
     _result(_fc(a).remove_link(a.key), f"unlink {a.key}")
 
 
+_MISSING = object()
+
+
+def _cust_node(cust, path):
+    """Resolve a dot-`path` inside the customization tree; _MISSING if absent."""
+    node = cust
+    for part in path.split("."):
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return _MISSING
+    return node
+
+
+def _cust_leaves(node, prefix=""):
+    """Flatten a customization node to (dot.path, value) leaves. Dicts recurse;
+    everything else (scalars, lists) is a leaf carrying `prefix` as its path."""
+    if isinstance(node, dict):
+        out = []
+        for k, v in node.items():
+            out.extend(_cust_leaves(v, prefix + "." + k if prefix else k))
+        return out
+    return [(prefix, node)]
+
+
 def cmd_customize(a):
-    _result(_fc(a).set(a.path, _coerce(a.value)), f"customize {a.path}={a.value}")
+    fc = _fc(a)
+    if a.value is not None:                          # write: unchanged behaviour
+        _result(fc.set(a.path, _coerce(a.value)), f"customize {a.path}={a.value}")
+        return
+    # read: dump the current customization tree (optionally a path subtree)
+    cust = fc.get_customization()
+    node = cust if not a.path else _cust_node(cust, a.path)
+    if node is _MISSING:
+        node = {}                                    # unknown path -> empty
+    leaves = sorted(_cust_leaves(node, a.path or ""), key=lambda kv: kv[0])
+    _emit(node, lambda: [print(f"{p} = {json.dumps(v, ensure_ascii=False)}")
+                         for p, v in leaves])
+
+
+def cmd_icons(a):
+    _emit(list(ICON_KEYS), lambda: print("\n".join(ICON_KEYS)))
 
 
 def cmd_avatar(a):
@@ -571,6 +665,13 @@ def build_parser():
     g = s.add_mutually_exclusive_group(required=True); g.add_argument("--file"); g.add_argument("--text")
     s.set_defaults(fn=cmd_desc)
 
+    s = add("edit", description="Edit an entry's rich text as markdown in $EDITOR "
+            "(falls back to $VISUAL); saves back on close if it changed.")
+    s.add_argument("section"); s.add_argument("entry")
+    s.add_argument("--field", default=None,
+                   help="rich-text field to edit (default: auto by section)")
+    s.set_defaults(fn=cmd_edit)
+
     s = add("date"); s.add_argument("section"); s.add_argument("entry")
     s.add_argument("--year"); s.add_argument("--month"); s.add_argument("--day")
     s.add_argument("--clear", action="store_true", help="reset the date before applying the parts given")
@@ -584,7 +685,13 @@ def build_parser():
     s = add("link"); s.add_argument("key"); s.add_argument("display"); s.add_argument("url"); s.set_defaults(fn=cmd_link)
     s = add("unlink"); s.add_argument("key"); s.set_defaults(fn=cmd_unlink)
 
-    s = add("customize"); s.add_argument("path"); s.add_argument("value"); s.set_defaults(fn=cmd_customize)
+    s = add("customize", description="With no value, PRINT the current customization "
+            "tree (a path filters to that subtree); with a value, SET that dot-path.")
+    s.add_argument("path", nargs="?", help="dot-path into resume.customization, e.g. font.fontFamily")
+    s.add_argument("value", nargs="?", help="new value (JSON-coerced); omit to read instead of write")
+    s.set_defaults(fn=cmd_customize)
+    add("icons", description="List commonly-used section iconKeys. Any FontAwesome-"
+        "style key may work; this is the verified set.").set_defaults(fn=cmd_icons)
     s = add("avatar"); s.add_argument("action", choices=["on", "off", "set", "remove"])
     s.add_argument("src", nargs="?", help="URL or file path (for `avatar set`)"); s.set_defaults(fn=cmd_avatar)
     add("templates").set_defaults(fn=cmd_templates)
@@ -601,9 +708,13 @@ def build_parser():
     add("share").set_defaults(fn=cmd_share)
 
     s = add("export"); s.add_argument("-o", "--output", help="output JSON file (default resume-backup.json)")
+    s.add_argument("--format", choices=["flowcv", "jsonresume"], default="flowcv",
+                   help="flowcv (raw backup) or jsonresume (jsonresume.org schema; default resume.jsonresume.json)")
     s.set_defaults(fn=cmd_export)
     s = add("import"); s.add_argument("file", help="a JSON backup produced by `export`")
     s.add_argument("--title", help="title for the restored resume (default: '<name> (restored)')")
+    s.add_argument("--format", choices=["flowcv", "jsonresume"], default="flowcv",
+                   help="flowcv (raw backup) or jsonresume (a jsonresume.org doc, built onto the current resume)")
     s.set_defaults(fn=cmd_import)
 
     s = add("backups", description="List local resume snapshots (auto-saved before "

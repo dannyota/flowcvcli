@@ -72,6 +72,7 @@ flowcv add work --set title="Engineer" --set company="Acme" \
        --set start=01/2022 --set end=Present --text $'- Did a measurable thing.'
 flowcv add custom2 --section-name "Open Source" --icon code --text "…"   # heading+icon at creation
 flowcv desc work <id> --file role.md           # rich text; --field is optional (auto: profile=text, skill=infoHtml)
+flowcv edit work <id>                          # open the entry's rich text as markdown in $EDITOR, save on change
 flowcv date publication <id> --year 2018       # structured date; merges (only passed parts change), --clear resets
 flowcv field work <id> employer --text "Acme Corp"
 flowcv rm work <id>
@@ -95,8 +96,11 @@ flowcv avatar set https://example.com/me.png   # upload from URL or file
 flowcv avatar on | off | remove
 
 # styling (a delta into resume.customization) and templates
-flowcv customize font.fontFamily "Source Sans Pro"
+flowcv customize                     # no value = print the current customization tree
+flowcv customize font                #   filter to a subtree (leaves as dot.path = value)
+flowcv customize font.fontFamily "Source Sans Pro"   # with a value = set that dot-path
 flowcv customize colors.basic.single '"#0e374e"'
+flowcv icons                         # list commonly-used section iconKeys
 flowcv templates                     # lists each as [free] / [PAID] (paid needs a subscription)
 flowcv apply-template <templateId>   # warns first if the template is paid
 
@@ -108,6 +112,8 @@ flowcv share | publish | unpublish
 # backup / restore
 flowcv export -o backup.json          # full resume snapshot (JSON) — keep one before big edits
 flowcv import backup.json             # restore the snapshot into a NEW resume (non-destructive)
+flowcv export --format jsonresume -o me.json   # export to the jsonresume.org schema
+flowcv import --format jsonresume me.json      # build a NEW resume from a JSON Resume doc
 
 flowcv login                          # refresh the cached session
 flowcv md2html --file role.md         # preview HTML (offline)
@@ -145,6 +151,11 @@ fc.set_date("publication", "id", year=2018)         # structured date (year-only
 import json
 json.dump(fc.export_resume(), open("backup.json", "w"))   # full snapshot
 new_id = fc.import_resume(json.load(open("backup.json")))  # restore into a NEW resume
+
+# JSON Resume interop (jsonresume.org schema)
+from flowcvcli import to_jsonresume, from_jsonresume
+jr = to_jsonresume(fc.export_resume())                     # FlowCV -> JSON Resume dict
+fc.import_resume(from_jsonresume(jr, base=fc.get_resume())) # JSON Resume -> a NEW resume
 
 # many edits? batch caches the read (1 GET instead of N against the rate limit)
 with fc.batch():
@@ -199,6 +210,7 @@ flowcvcli/             # the package (import flowcvcli)
   content.py           #   sections & entries (add/edit/reorder/hide/sections)
   personal.py          #   header details & links
   customization.py     #   styling deltas & templates
+  jsonresume.py        #   JSON Resume (jsonresume.org) import/export
   photo.py             #   avatar upload / toggle
   resume.py            #   list, create/duplicate/rename/delete, download, publish
   api.py               #   FlowCV = Client + all mixins
