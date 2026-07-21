@@ -12,6 +12,8 @@ the user's environment, never from the install location, so the tool behaves the
 same whether it's run from source or ``pip install``-ed.
 """
 import os
+import stat
+import time
 
 from .errors import ApiError
 
@@ -21,6 +23,19 @@ APP = "flowcvcli"
 def _config_home():
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     return os.path.join(base, APP)
+
+
+def _state_home():
+    """XDG state home for the app: $XDG_STATE_HOME or ~/.local/state (data we can
+    lose, like resume snapshots — separate from config). Read fresh each call."""
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "state")
+    return os.path.join(base, APP)
+
+
+def backups_dir():
+    """Directory for resume snapshots: <state home>/flowcvcli/backups."""
+    return os.path.join(_state_home(), "backups")
 
 
 # Where the cached session cookie lives (override with $FLOWCV_SESSION_FILE).
@@ -87,3 +102,40 @@ class Config:
             raise ApiError("No resume id. Set FLOWCV_RESUME_ID, pass resume_id=, "
                            "or use --resume-id. Run `flowcv resumes` to list them.")
         return self.resume_id
+
+
+# ---- diagnostics (for `flowcv doctor`) ------------------------------------
+def dotenv_files_found():
+    """Existing dotenv files, in search order — what `doctor` reports it read."""
+    return [p for p in _dotenv_files() if os.path.exists(p)]
+
+
+def _session_usable():
+    """True if the cached session file exists and is non-empty (what auth needs)."""
+    try:
+        return os.path.getsize(SESSION_FILE) > 0
+    except OSError:
+        return False
+
+
+def resolve_auth_source(cfg):
+    """The auth source Client._ensure_auth would use, as a label (None if unauthed).
+    Mirrors that method's priority: env cookie -> cached session -> credentials."""
+    if cfg.cookie:
+        return "env cookie (FLOWCV_COOKIE)"
+    if _session_usable():
+        return "cached session"
+    if cfg.email and cfg.password:
+        return "credentials (email + password)"
+    return None
+
+
+def session_file_info():
+    """Perms/age of the cached session file for `doctor` (exists=False if absent)."""
+    path = SESSION_FILE
+    try:
+        st = os.stat(path)
+    except OSError:
+        return {"path": path, "exists": False, "mode": None, "age_days": None}
+    return {"path": path, "exists": True, "mode": stat.S_IMODE(st.st_mode),
+            "age_days": (time.time() - st.st_mtime) / 86400.0, "size": st.st_size}

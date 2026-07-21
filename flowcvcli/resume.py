@@ -5,14 +5,20 @@ ResumeMixin is a pure mixin over Client (see client.py): no __init__, all
 state lives on `self`. Write methods return the JSON envelope dict so callers
 can check `env["success"]`.
 """
+import datetime
+import glob
 import json
+import os
 import uuid
 
+from .config import backups_dir
 from .errors import ApiError
 
 # Top-level resume fields that must NOT be copied into a new resume: server
 # regenerates them (unique tokens / timestamps). `id` and `uuid` are reassigned.
 _NEW_RESUME_DROP = ("webToken", "feedbackToken", "createdAt", "updatedAt", "lastChangeAt")
+
+_BACKUP_KEEP = 20   # newest snapshots to retain per resume id (older pruned)
 
 
 class ResumeMixin:
@@ -73,6 +79,46 @@ class ResumeMixin:
         if title is None:
             title = (resume.get("title") or "Resume") + " (restored)"
         return self._create_from(title, keep_content=True, src=resume)
+
+    # ---- local snapshots (auto-backup before destructive ops) -------------
+    def snapshot(self, resume_id=None):
+        """Save a timestamped JSON snapshot of a resume, returning the path.
+
+        Used to guard destructive ops: export_resume() -> <state home>/flowcvcli/
+        backups/<id>-<UTC yyyymmdd-HHMMSS>.json (dir 0o700, file 0o600), then prune
+        to the newest _BACKUP_KEEP per id. Raises (ApiError) if the resume can't be
+        fetched — the caller then aborts the destructive op instead of losing data.
+        """
+        rid = resume_id or self.resume_id
+        blob = json.dumps(self.export_resume(), indent=2, ensure_ascii=False)
+        d = backups_dir()
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+        path = os.path.join(d, f"{rid}-{ts}.json")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(blob)
+        self._prune_backups(rid)
+        return path
+
+    def _prune_backups(self, resume_id):
+        """Keep only the newest _BACKUP_KEEP snapshots for `resume_id`. Timestamp
+        names are zero-padded, so lexical sort == chronological."""
+        files = sorted(glob.glob(os.path.join(backups_dir(), f"{resume_id}-*.json")))
+        for old in files[:-_BACKUP_KEEP]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+
+    def list_backups(self, all_resumes=False):
+        """Snapshot files (path, size, mtime) for the current resume, or all."""
+        pattern = "*.json" if all_resumes else f"{self.resume_id}-*.json"
+        out = []
+        for path in sorted(glob.glob(os.path.join(backups_dir(), pattern))):
+            st = os.stat(path)
+            out.append({"path": path, "size": st.st_size, "mtime": st.st_mtime})
+        return out
 
     def rename_resume(self, title):
         """PATCH /resumes/rename_resume — set the resume's title."""

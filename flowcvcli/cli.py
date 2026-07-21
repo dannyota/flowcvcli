@@ -14,6 +14,7 @@ argument-validation messages (e.g. a missing `--yes`) still go to stderr as a
 plain `sys.exit` — JSON consumers read stdout, so those never pollute the output.
 """
 import argparse
+import datetime
 import json
 import os
 import re
@@ -22,6 +23,8 @@ import sys
 from . import __version__
 from .api import FlowCV
 from .client import login as do_login, _write_session, _jar_header
+from .config import (Config, dotenv_files_found, resolve_auth_source,
+                     session_file_info)
 from .errors import FlowCVError
 from .content import SECTION_META, label_of, rich_field
 from .markup import html_to_text, md_to_html
@@ -132,6 +135,8 @@ def cmd_delete_resume(a):
     rid = fc.resume_id
     if not a.yes:
         sys.exit(f"refusing to delete resume {rid} without --yes (this is permanent).")
+    if not a.no_backup:
+        fc.snapshot(rid)          # aborts the delete if the snapshot fails (raises)
     _result(fc.delete_resume(rid), f"delete resume {rid[:8]}")
 
 
@@ -210,6 +215,8 @@ def cmd_rm_section(a):
     fc = _fc(a)
     if not a.yes:
         sys.exit(f"refusing to delete section {a.section!r} and all its entries without --yes.")
+    if not a.no_backup:
+        fc.snapshot()             # aborts the delete if the snapshot fails (raises)
     _result(fc.delete_section(a.section), f"rm-section {a.section}")
 
 
@@ -386,6 +393,111 @@ def cmd_md2html(a):
     _emit({"html": html}, lambda: print(html))
 
 
+def cmd_backups(a):
+    backups = _fc(a).list_backups(all_resumes=a.all)
+
+    def human():
+        if not backups:
+            print("no snapshots yet (they're auto-saved before rm-section / delete-resume)")
+            return
+        for b in backups:
+            when = datetime.datetime.fromtimestamp(b["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
+            print(f"  {when}  {b['size']:>8}  {b['path']}")
+    _emit(backups, human)
+
+
+# ---- doctor: first-run / auth diagnostics --------------------------------
+def _curl_cffi_available():
+    """True if curl_cffi imports — only credential (email/password) login needs it."""
+    try:
+        import curl_cffi   # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _check(name, ok, detail):
+    """A single doctor result: ok True=pass, False=fail, None=skipped/not-applicable."""
+    return {"name": name, "ok": ok, "detail": detail}
+
+
+def _doctor_auth_check(cfg, source):
+    where = "; ".join(dotenv_files_found()) or "(none found)"
+    if source:
+        return _check("auth source", True, f"dotenv: {where}; using {source}")
+    return _check("auth source", False, f"dotenv: {where}; no auth resolved — set "
+                  "FLOWCV_COOKIE, or FLOWCV_EMAIL + FLOWCV_PASSWORD")
+
+
+def _doctor_env_cookie_check(cfg):
+    if not cfg.cookie:
+        return _check("env cookie", None, "no FLOWCV_COOKIE set")
+    if "flowcvsidapp=" in cfg.cookie:
+        return _check("env cookie", True, "FLOWCV_COOKIE carries flowcvsidapp=")
+    return _check("env cookie", False, "FLOWCV_COOKIE has no flowcvsidapp= — paste the "
+                  "full name=value pair from DevTools, not just the value")
+
+
+def _doctor_session_check():
+    info = session_file_info()
+    path = info["path"]
+    if not info["exists"]:
+        return _check("session file", None, f"no cached session ({path})")
+    if info["mode"] != 0o600:
+        return _check("session file", False, f"{path} perms are {info['mode']:04o}, "
+                      f"expected 0600 — run: chmod 600 {path}")
+    return _check("session file", True, f"{path} (0600, {info['age_days']:.0f} day(s) old)")
+
+
+def _doctor_curl_cffi_check(source):
+    if _curl_cffi_available():
+        return _check("curl_cffi", True, "importable (used for email/password login)")
+    if source and source.startswith("credentials"):
+        return _check("curl_cffi", False, "NOT installed — required for email/password "
+                      "login; run: pip install curl_cffi")
+    return _check("curl_cffi", None, "not installed (only needed for `login` with "
+                  "email/password)")
+
+
+def _doctor_live_check(a, offline):
+    if offline:
+        return _check("live api", None, "skipped")
+    try:
+        fc = _fc(a)
+        n = len(fc.list_resumes())
+    except FlowCVError as e:
+        return _check("live api", False, f"auth check failed: {e}")
+    try:
+        idnote = f"resume id {fc.resume_id} resolves"
+    except FlowCVError as e:
+        idnote = f"resume id unresolved ({e})"
+    return _check("live api", True, f"auth valid — {n} resume(s); {idnote}")
+
+
+def cmd_doctor(a):
+    cfg = Config.load()
+    source = resolve_auth_source(cfg)
+    checks = [_doctor_auth_check(cfg, source),
+              _doctor_env_cookie_check(cfg),
+              _doctor_session_check(),
+              _doctor_curl_cffi_check(source),
+              _doctor_live_check(a, a.offline)]
+    ok = all(c["ok"] is not False for c in checks)   # skipped (None) never fails
+
+    def human():
+        width = max(len(c["name"]) for c in checks)
+        for c in checks:
+            status = "ok" if c["ok"] else ("--" if c["ok"] is None else "FAIL")
+            print(f"{status:<4}  {c['name']:<{width}}  {c['detail']}")
+        n_ok = sum(c["ok"] is True for c in checks)
+        n_fail = sum(c["ok"] is False for c in checks)
+        n_skip = sum(c["ok"] is None for c in checks)
+        print(f"summary: {n_ok} ok, {n_fail} failed, {n_skip} skipped")
+    _emit({"checks": checks, "ok": ok}, human)
+    if not ok:
+        sys.exit(1)
+
+
 # -------------------------------------------------------------------- parser
 def build_parser():
     # --resume-id on a shared parent so it works BEFORE or AFTER the subcommand
@@ -415,6 +527,7 @@ def build_parser():
     s = add("duplicate"); s.add_argument("title", nargs="?"); s.set_defaults(fn=cmd_duplicate)
     s = add("rename"); s.add_argument("title"); s.set_defaults(fn=cmd_rename)
     s = add("delete-resume"); s.add_argument("--yes", action="store_true", help="confirm permanent deletion")
+    s.add_argument("--no-backup", action="store_true", help="skip the auto-snapshot taken before deleting")
     s.set_defaults(fn=cmd_delete_resume)
 
     s = add("show"); s.add_argument("section", nargs="?"); s.set_defaults(fn=cmd_show)
@@ -439,6 +552,7 @@ def build_parser():
     s.set_defaults(fn=cmd_section_icon)
     s = add("rm-section"); s.add_argument("section")
     s.add_argument("--yes", action="store_true", help="confirm deleting the section + its entries")
+    s.add_argument("--no-backup", action="store_true", help="skip the auto-snapshot taken before deleting")
     s.set_defaults(fn=cmd_rm_section)
     s = add("reorder-sections")
     s.add_argument("ids", nargs="*", help="section ids in the desired order (omit to print the current order)")
@@ -491,6 +605,17 @@ def build_parser():
     s = add("import"); s.add_argument("file", help="a JSON backup produced by `export`")
     s.add_argument("--title", help="title for the restored resume (default: '<name> (restored)')")
     s.set_defaults(fn=cmd_import)
+
+    s = add("backups", description="List local resume snapshots (auto-saved before "
+            "rm-section / delete-resume). Restore one into a NEW resume with "
+            "`flowcv import <file>`.")
+    s.add_argument("--all", action="store_true", help="list snapshots for all resumes, not just the current one")
+    s.set_defaults(fn=cmd_backups)
+
+    s = add("doctor", description="Diagnose auth and first-run setup: dotenv files, "
+            "auth source, session file perms/age, curl_cffi, and a live API check.")
+    s.add_argument("--offline", action="store_true", help="skip the live API check")
+    s.set_defaults(fn=cmd_doctor)
 
     s = add("md2html")
     g = s.add_mutually_exclusive_group(required=True); g.add_argument("--file"); g.add_argument("--text")
