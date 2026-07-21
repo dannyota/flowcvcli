@@ -163,6 +163,22 @@ class RoundTripTest(unittest.TestCase):
             self.assertEqual(actions, [])
             self.assertEqual(fc.calls, [])
 
+    def test_server_bumped_updated_at_is_not_a_change(self):
+        # Verified live: a push bumps updatedAt server-side, so a second push
+        # saw the stale local timestamp as a diff and re-wrote the entry
+        # forever. Bookkeeping timestamps must never trigger a write.
+        fix = fixture()
+        fix["content"]["work"]["entries"][0]["updatedAt"] = "T1"
+        with tempfile.TemporaryDirectory() as tmp:
+            d = os.path.join(tmp, "resume")
+            repo.pull(FakeFlowCV(fix), d)
+            fix2 = fixture()
+            fix2["content"]["work"]["entries"][0]["updatedAt"] = "T2-bumped"
+            fc = FakeFlowCV(fix2)
+            actions = repo.push(fc, d)
+            self.assertEqual(actions, [])
+            self.assertEqual(fc.calls, [])
+
 
 # ------------------------------------------------------------- push: edits
 def _pulled(tmp):

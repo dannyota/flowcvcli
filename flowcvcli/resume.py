@@ -40,6 +40,12 @@ class ResumeMixin:
         set the title. `keep_content=False` makes a blank resume that keeps the
         same identity (personalDetails) and design (customization);
         `keep_content=True` is a full copy. Returns the new resume id.
+
+        Verified live: the server IGNORES the client-supplied id and mints its
+        own (returned in data.resume), so we must read the id back — trusting
+        ours yields dead ids (every follow-up read 400s with reloadClient). The
+        clone is also force-unpublished: cloning a live resume would otherwise
+        instantly publish the copy under a fresh public token.
         """
         src = self.get_resume() if src is None else src
         clone = json.loads(json.dumps(src))    # deep copy
@@ -47,6 +53,7 @@ class ResumeMixin:
         clone["id"] = new_id
         clone["uuid"] = str(uuid.uuid4())
         clone["title"] = title
+        clone["webResumeLive"] = False
         for k in _NEW_RESUME_DROP:
             clone.pop(k, None)
         if not keep_content:
@@ -54,7 +61,8 @@ class ResumeMixin:
         env = self.request("resumes/create", method="POST", body={"clientResume": clone})
         if not env.get("success"):
             raise ApiError(f"create resume failed: {json.dumps(env)[:200]}")
-        return new_id
+        created = (env.get("data") or {}).get("resume") or {}
+        return created.get("id") or new_id
 
     def create_resume(self, title):
         """Create a new, empty resume (same contact details & styling, no content).

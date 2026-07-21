@@ -282,8 +282,15 @@ def _push_entries(fc, sid, dirname, live_sec, entries, root, act, dry_run, manif
             lambda o=list(file_order): fc.reorder_entries(sid, o))
 
 
+# Bookkeeping timestamps: pulled into frontmatter for information, but never a
+# reason to write — the server bumps updatedAt on every save, so diffing it
+# would make each push echo forever (verified live).
+_DIFF_SKIP = ("updatedAt", "createdAt")
+
+
 def _push_existing(fc, sid, rf, live, fm, body, act):
-    changed = [k for k, v in fm.items() if live.get(k) != v]
+    changed = [k for k, v in fm.items()
+               if k not in _DIFF_SKIP and live.get(k) != v]
     body_changed = body.strip() != html_to_md(live.get(rf) or "").strip()
     if not changed and not body_changed:
         return
