@@ -4,6 +4,14 @@ Run `python3 flowcv.py --help`. Auth comes from .env / env vars
 (FLOWCV_COOKIE, or FLOWCV_EMAIL+FLOWCV_PASSWORD). The resume id is optional:
 with a single resume the tool auto-selects it; with several, set FLOWCV_RESUME_ID
 or pass `--resume-id <id>` (any command accepts it).
+
+Output: by default each command prints human-readable text. Pass `--json`
+(anywhere, like `--resume-id`) for machine-readable output — every command then
+writes exactly ONE JSON document to stdout and nothing else, so scripts and LLM
+agents can parse it. Under `--json`, a library error (`FlowCVError`) is written
+to stdout as `{"error": ..., "type": ...}` and the process exits 1. CLI-level
+argument-validation messages (e.g. a missing `--yes`) still go to stderr as a
+plain `sys.exit` — JSON consumers read stdout, so those never pollute the output.
 """
 import argparse
 import json
@@ -55,11 +63,30 @@ def _coerce(s):
         return s
 
 
-def _result(env, label):
+# Output mode. Set once by main() from `--json`; read by _emit(). A module flag
+# keeps each cmd_* free of if/else print forks — commands build a data value and
+# a human-print closure, and _emit routes to whichever the mode selects.
+_JSON = False
+
+
+def _emit(data, human):
+    """Route output: in --json mode print one JSON document; else run human()."""
+    if _JSON:
+        print(json.dumps(data, ensure_ascii=False))
+    else:
+        human()
+
+
+def _result_human(env, label):
     ok = env.get("success") if isinstance(env, dict) else env
     print(f"{label} -> success={ok}")
     if isinstance(env, dict) and not ok:
         print("  !", json.dumps(env)[:200])
+
+
+def _result(env, label):
+    """Report a mutation: human -> `label -> success=..`; JSON -> the envelope."""
+    _emit(env, lambda: _result_human(env, label))
 
 
 def _fc(a):
@@ -72,23 +99,28 @@ def cmd_login(a):
     if not (fc.cfg.email and fc.cfg.password):
         sys.exit("Set FLOWCV_EMAIL and FLOWCV_PASSWORD in .env to use `login`.")
     _write_session(_jar_header(do_login(fc.cfg.email, fc.cfg.password)))
-    print("login ok -> session cached to .flowcv_session")
+    _emit({"success": True}, lambda: print("login ok -> session cached to .flowcv_session"))
 
 
 def cmd_resumes(a):
-    for r in _fc(a).list_resumes():
-        live = "live" if r.get("webResumeLive") else "private"
-        print(f"  {r.get('id','(no id)')}  {(r.get('title') or '(untitled)'):20}  web:{r.get('webToken','-')} [{live}]")
+    resumes = _fc(a).list_resumes()
+
+    def human():
+        for r in resumes:
+            live = "live" if r.get("webResumeLive") else "private"
+            print(f"  {r.get('id','(no id)')}  {(r.get('title') or '(untitled)'):20}  web:{r.get('webToken','-')} [{live}]")
+    _emit([{"id": r.get("id"), "title": r.get("title"), "webToken": r.get("webToken"),
+            "live": bool(r.get("webResumeLive"))} for r in resumes], human)
 
 
 def cmd_new(a):
     new_id = _fc(a).create_resume(a.title)
-    print(f"created new resume -> {new_id}")
+    _emit({"id": new_id, "success": True}, lambda: print(f"created new resume -> {new_id}"))
 
 
 def cmd_duplicate(a):
     new_id = _fc(a).duplicate_resume(a.title)
-    print(f"duplicated -> {new_id}")
+    _emit({"id": new_id, "success": True}, lambda: print(f"duplicated -> {new_id}"))
 
 
 def cmd_rename(a):
@@ -104,25 +136,38 @@ def cmd_delete_resume(a):
 
 
 def cmd_show(a):
-    resume = _fc(a).get_resume()
-    for sec, obj in (resume.get("content") or {}).items():
-        if a.section and sec != a.section:
-            continue
-        print(f"[{sec}] '{obj.get('displayName')}' ({len(obj.get('entries') or [])} entries)")
-        for e in obj.get("entries") or []:
-            d = f"  {e.get('startDateNew','')}–{e.get('endDateNew','')}" if e.get("startDateNew") or e.get("endDateNew") else ""
-            print(f"   {e.get('id','(no id)')}  {label_of(e)}{d}")
+    content = _fc(a).get_resume().get("content") or {}
+    shown = [(sec, obj) for sec, obj in content.items()
+             if not a.section or sec == a.section]
+
+    def human():
+        for sec, obj in shown:
+            print(f"[{sec}] '{obj.get('displayName')}' ({len(obj.get('entries') or [])} entries)")
+            for e in obj.get("entries") or []:
+                d = f"  {e.get('startDateNew','')}–{e.get('endDateNew','')}" if e.get("startDateNew") or e.get("endDateNew") else ""
+                print(f"   {e.get('id','(no id)')}  {label_of(e)}{d}")
+    _emit({sec: {"displayName": obj.get("displayName"),
+                 "entries": [{"id": e.get("id"), "label": label_of(e),
+                              "start": e.get("startDateNew"), "end": e.get("endDateNew"),
+                              "hidden": bool(e.get("isHidden"))}
+                             for e in obj.get("entries") or []]}
+           for sec, obj in shown}, human)
 
 
 def cmd_dump(a):
     fc = _fc(a)
     e = fc.find_entry(fc.get_resume(), a.section, a.entry)
-    for k, v in e.items():
-        if k in TEXT_FIELDS:
-            print(f"  {k} (text): {html_to_text(v)}")
-            print(f"  {k} (html): {v}")
-        else:
-            print(f"  {k}: {v!r}")
+
+    def human():
+        for k, v in e.items():
+            if k in TEXT_FIELDS:
+                print(f"  {k} (text): {html_to_text(v)}")
+                print(f"  {k} (html): {v}")
+            else:
+                print(f"  {k}: {v!r}")
+    data = dict(e)
+    data["_text"] = html_to_text(e.get(rich_field(a.section)))
+    _emit(data, human)
 
 
 def cmd_add(a):
@@ -134,7 +179,7 @@ def cmd_add(a):
         sets[_resolve_set_key(a.section, k)] = v
     new_id = _fc(a).add_entry(a.section, sets=sets, md=_read(a.file, a.text),
                               section_name=a.section_name, section_icon=a.icon)
-    print(f"added {a.section} entry -> {new_id}")
+    _emit({"id": new_id, "success": True}, lambda: print(f"added {a.section} entry -> {new_id}"))
 
 
 def cmd_rm(a):
@@ -175,16 +220,28 @@ def cmd_reorder_sections(a):
         so = (resume.get("customization") or {}).get("sectionOrder") or {}
         content = resume.get("content") or {}
         name = lambda sid: (content.get(sid) or {}).get("displayName", "")
-        print(f"section order ({a.layout}):")
+
+        def human():
+            print(f"section order ({a.layout}):")
+            if a.layout == "two":
+                lay = so.get("two") or {}
+                for side in ("leftSectionsSorted", "rightSectionsSorted"):
+                    print(f"  {side}:")
+                    for sid in lay.get(side) or []:
+                        print(f"    {sid}  {name(sid)}")
+            else:
+                for sid in (so.get(a.layout) or {}).get("sectionsSorted") or []:
+                    print(f"  {sid}  {name(sid)}")
+        cols = lambda ids: [{"id": sid, "name": name(sid)} for sid in ids or []]
         if a.layout == "two":
             lay = so.get("two") or {}
-            for side in ("leftSectionsSorted", "rightSectionsSorted"):
-                print(f"  {side}:")
-                for sid in lay.get(side) or []:
-                    print(f"    {sid}  {name(sid)}")
+            data = {"layout": "two",
+                    "leftSectionsSorted": cols(lay.get("leftSectionsSorted")),
+                    "rightSectionsSorted": cols(lay.get("rightSectionsSorted"))}
         else:
-            for sid in (so.get(a.layout) or {}).get("sectionsSorted") or []:
-                print(f"  {sid}  {name(sid)}")
+            data = {"layout": a.layout,
+                    "sectionsSorted": cols((so.get(a.layout) or {}).get("sectionsSorted"))}
+        _emit(data, human)
         return
     if a.layout == "two" and not a.side:
         sys.exit("--layout two stores each column separately — add --side left or --side right.")
@@ -217,14 +274,16 @@ def cmd_export(a):
     out = a.output or "resume-backup.json"
     with open(out, "w") as f:
         json.dump(_fc(a).export_resume(), f, indent=2, ensure_ascii=False)
-    print(f"exported resume -> {out} ({os.path.getsize(out)} bytes)")
+    n = os.path.getsize(out)
+    _emit({"saved": out, "bytes": n}, lambda: print(f"exported resume -> {out} ({n} bytes)"))
 
 
 def cmd_import(a):
     with open(a.file) as f:
         data = json.load(f)
     new_id = _fc(a).import_resume(data, title=a.title)
-    print(f"restored backup into a NEW resume -> {new_id} (current resume untouched)")
+    _emit({"id": new_id, "success": True},
+          lambda: print(f"restored backup into a NEW resume -> {new_id} (current resume untouched)"))
 
 
 def cmd_pd(a):
@@ -232,8 +291,13 @@ def cmd_pd(a):
 
 
 def cmd_links(a):
-    for k, display, link, shown in _fc(a).list_links():
-        print(f"  {k}: {display} -> {link} [{'shown' if shown else 'hidden'}]")
+    links = _fc(a).list_links()
+
+    def human():
+        for k, display, link, shown in links:
+            print(f"  {k}: {display} -> {link} [{'shown' if shown else 'hidden'}]")
+    _emit([{"key": k, "display": display, "link": link, "shown": shown}
+           for k, display, link, shown in links], human)
 
 
 def cmd_link(a):
@@ -265,14 +329,17 @@ def _tname(t):
 
 
 def cmd_templates(a):
-    free = paid = 0
-    for t in _fc(a).list_templates():
-        if not isinstance(t, dict):
-            continue
-        premium = bool(t.get("isPremium"))
-        paid += premium; free += not premium
-        print(f"  {t.get('id') or t.get('templateId')}  [{'PAID' if premium else 'free'}]  {_tname(t)}")
-    print(f"\n{free} free, {paid} paid (PAID templates need a FlowCV subscription to apply).")
+    templates = [t for t in _fc(a).list_templates() if isinstance(t, dict)]
+
+    def human():
+        free = paid = 0
+        for t in templates:
+            premium = bool(t.get("isPremium"))
+            paid += premium; free += not premium
+            print(f"  {t.get('id') or t.get('templateId')}  [{'PAID' if premium else 'free'}]  {_tname(t)}")
+        print(f"\n{free} free, {paid} paid (PAID templates need a FlowCV subscription to apply).")
+    _emit([{"id": t.get("id") or t.get("templateId"), "title": _tname(t),
+            "premium": bool(t.get("isPremium"))} for t in templates], human)
 
 
 def cmd_apply_template(a):
@@ -287,16 +354,21 @@ def cmd_download(a):
         out = a.output or f"{a.token}.pdf"
         with open(out, "wb") as f:
             f.write(data)
-        print(f"saved {out} ({len(data)} bytes)")
+        n = len(data)
     else:
-        path = fc.save_pdf(a.output or "resume.pdf", pages=a.pages)
-        print(f"saved {path} ({os.path.getsize(path)} bytes)")
+        out = fc.save_pdf(a.output or "resume.pdf", pages=a.pages)
+        n = os.path.getsize(out)
+    _emit({"saved": out, "bytes": n}, lambda: print(f"saved {out} ({n} bytes)"))
 
 
 def cmd_publish(a):
     fc = _fc(a)
-    _result(fc.publish(), "publish")
-    print(f"  {fc.share_url()}")
+    env = fc.publish()
+
+    def human():
+        _result_human(env, "publish")
+        print(f"  {fc.share_url()}")
+    _emit(env, human)
 
 
 def cmd_unpublish(a):
@@ -305,18 +377,29 @@ def cmd_unpublish(a):
 
 def cmd_share(a):
     st = _fc(a).web_status()
-    print(f"web resume: {'LIVE' if st['live'] else 'disabled'}\nshare url : {st['url'] or '(none)'}")
+    _emit(st, lambda: print(f"web resume: {'LIVE' if st['live'] else 'disabled'}\n"
+                            f"share url : {st['url'] or '(none)'}"))
 
 
 def cmd_md2html(a):
-    print(md_to_html(_read(a.file, a.text)))
+    html = md_to_html(_read(a.file, a.text))
+    _emit({"html": html}, lambda: print(html))
 
 
 # -------------------------------------------------------------------- parser
 def build_parser():
     # --resume-id on a shared parent so it works BEFORE or AFTER the subcommand
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--resume-id", dest="resume_id_override", help="target a specific resume")
+    # SUPPRESS: the subparser shares this flag via parents=[]; a plain default
+    # would be re-applied by the subcommand's parse and clobber a value given
+    # BEFORE the subcommand (same issue as --json; read via getattr).
+    common.add_argument("--resume-id", dest="resume_id_override",
+                        default=argparse.SUPPRESS, help="target a specific resume")
+    # default=SUPPRESS so this shared flag works BEFORE or AFTER the subcommand:
+    # a plain default would be re-applied by the subparser and clobber a value the
+    # top-level parser already set (read via getattr(args, "json", False)).
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                        help="machine-readable JSON output")
     p = argparse.ArgumentParser(prog="flowcv", description=__doc__, parents=[common],
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -416,8 +499,13 @@ def build_parser():
 
 
 def main(argv=None):
+    global _JSON
     args = build_parser().parse_args(argv)
+    _JSON = bool(getattr(args, "json", False))
     try:
         args.fn(args)
-    except FlowCVError as e:      # library errors -> argparse-style exit 1 on stderr
-        sys.exit(str(e))
+    except FlowCVError as e:      # library errors -> exit 1
+        if _JSON:                 # JSON mode: one error object on stdout
+            print(json.dumps({"error": str(e), "type": type(e).__name__}, ensure_ascii=False))
+            sys.exit(1)
+        sys.exit(str(e))          # human mode: argparse-style message on stderr

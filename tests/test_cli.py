@@ -49,6 +49,12 @@ class ParserTest(unittest.TestCase):
         a = build_parser().parse_args(["date", "publication", "E1", "--clear"])
         self.assertTrue(a.clear)
 
+    def test_resume_id_works_before_and_after_the_subcommand(self):
+        a = build_parser().parse_args(["--resume-id", "RID", "resumes"])
+        self.assertEqual(getattr(a, "resume_id_override", None), "RID")
+        a = build_parser().parse_args(["resumes", "--resume-id", "RID"])
+        self.assertEqual(getattr(a, "resume_id_override", None), "RID")
+
     def test_reorder_sections_accepts_side(self):
         a = build_parser().parse_args(["reorder-sections", "a", "b",
                                        "--layout", "two", "--side", "left"])

@@ -13,11 +13,6 @@ runtime deps; run `python3 -m unittest discover -s tests -t .`).
 
 ## Phase 3 — features (by value)
 
-- [ ] *(in progress — background agent)* **`--json` global flag.**
-      Machine-readable output for every command (the
-      README targets LLM agents/scripts). Emit the envelope/ids/entries as JSON to
-      stdout; human text unchanged by default. Route all prints through a small
-      output helper so commands don't branch everywhere.
 - [ ] **Auto-snapshot before destructive ops.** Before `rm-section`,
       `delete-resume`, `import`-overwrites: `export_resume()` to
       `~/.local/state/flowcvcli/backups/<resume-id>-<ts>.json` (0600, keep last N).

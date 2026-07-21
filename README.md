@@ -113,8 +113,10 @@ flowcv login                          # refresh the cached session
 flowcv md2html --file role.md         # preview HTML (offline)
 ```
 
-Any command takes `--resume-id <id>` to target a specific resume. (From source,
-replace `flowcv` with `python3 flowcv.py`.)
+Any command takes `--resume-id <id>` to target a specific resume, and `--json`
+(before or after the subcommand) to emit exactly one machine-readable JSON
+document instead of human text — errors become `{"error", "type"}` on stdout
+with exit 1. (From source, replace `flowcv` with `python3 flowcv.py`.)
 
 ## Library (for scripts & LLM agents)
 
@@ -143,6 +145,11 @@ fc.set_date("publication", "id", year=2018)         # structured date (year-only
 import json
 json.dump(fc.export_resume(), open("backup.json", "w"))   # full snapshot
 new_id = fc.import_resume(json.load(open("backup.json")))  # restore into a NEW resume
+
+# many edits? batch caches the read (1 GET instead of N against the rate limit)
+with fc.batch():
+    fc.set_field("work", "id", "employer", "Acme Corp")
+    fc.set_date("publication", "id", year=2018)
 
 # errors are normal exceptions (they never SystemExit your process):
 from flowcvcli import FlowCVError, AuthError, RateLimitError, NotFoundError
