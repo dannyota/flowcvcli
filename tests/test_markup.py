@@ -51,6 +51,12 @@ class MdToHtmlTest(unittest.TestCase):
         self.assertEqual(md_to_html("***a **b** c***"),
                          f"<p{J}><strong><em>a b c</em></strong></p>")
 
+    def test_inline_bold_italic_inside_inline_bold_does_not_nest(self):
+        self.assertEqual(md_to_html("**a ***b*** c**"),
+                         f"<p{J}><strong>a b c</strong></p>")
+        self.assertEqual(md_to_html("say **a ***b*** c** here"),
+                         f"<p{J}>say <strong>a b c</strong> here</p>")
+
 
 class HtmlToTextTest(unittest.TestCase):
     def test_strips_tags_and_unescapes(self):
@@ -129,6 +135,9 @@ class HtmlToMdTest(unittest.TestCase):
             "## a ***b*** c",
             "***a **b** c***",
             "**a **b** c**",
+            "**a ***b*** c**",
+            "- bullet **a ***b*** c**",
+            "mid **a ***b*** c** end",
         ]
         for md in cases:
             html = md_to_html(md)

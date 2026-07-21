@@ -25,10 +25,15 @@ _LINK_SUB = r'<a target="_blank" rel="noopener noreferrer nofollow" href="\2">\1
 
 def _esc(s):
     """Escape text, then honor inline ***bold-italic***, **bold**, and
-    [text](url) links (triple-asterisks before double so they don't clash)."""
+    [text](url) links (triple-asterisks before double so they don't clash).
+
+    A ***bold-italic*** nested INSIDE a **bold** span collapses to plain text
+    (same rule as bold lines): nesting <strong> renders identically but breaks
+    html_to_md's inverse, so md_to_html never emits nested <strong>."""
     s = html.escape(s, quote=False)
     s = re.sub(r"\*\*\*(.+?)\*\*\*", r"<strong><em>\1</em></strong>", s)
-    s = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
+    s = re.sub(r"\*\*(.+?)\*\*",
+               lambda m: "<strong>%s</strong>" % re.sub(r"</?(?:strong|em)>", "", m.group(1)), s)
     return _LINK_RE.sub(_LINK_SUB, s)
 
 
@@ -137,7 +142,8 @@ def html_to_md(html):
     same <p><strong>H</strong></p>, so a bold paragraph always round-trips to
     the "**H**" form (never "## H"). Nested <strong> (redundant bold, e.g. from
     foreign editor HTML) collapses to one ** pair — md_to_html never emits it
-    (bold markers inside an already-bold line are dropped as redundant).
+    (bold markers inside an already-bold line or inline **span** are dropped
+    as redundant).
     Re-running md_to_html on the result is stable:
     md_to_html(html_to_md(md_to_html(md))) == md_to_html(md).
     """

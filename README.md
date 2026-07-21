@@ -157,7 +157,7 @@ fc.rename_section("skill", "Core Skills"); fc.delete_section("custom1")
 fc.hide_entry("work", "id", hidden=True)
 new_id = fc.create_resume("Second Resume")          # or fc.duplicate_resume()
 fc.rename_resume("New Title"); fc.delete_resume()    # delete is permanent
-fc.set_date("publication", "id", year=2018)         # structured date (year-only)
+fc.set_date("publication", "id", year=2018)         # structured date; merges (only passed parts change)
 
 # backup / restore
 import json
