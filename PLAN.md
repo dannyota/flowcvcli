@@ -7,13 +7,13 @@ runtime deps; run `python3 -m unittest discover -s tests -t .`).
 
 ## Phase 2 — library & robustness
 
-- [ ] **`flowcv doctor`.** Check: auth source + validity (cheap `resumes/all`),
+- [ ] *(in progress — background agent)* **`flowcv doctor`.** Check: auth source + validity (cheap `resumes/all`),
       session file age/perms, curl_cffi importable, resume id resolves, appVersion
       fetch. Print pass/fail lines; exit non-zero on failure.
 
 ## Phase 3 — features (by value)
 
-- [ ] **Auto-snapshot before destructive ops.** Before `rm-section`,
+- [ ] *(in progress — background agent)* **Auto-snapshot before destructive ops.** Before `rm-section`,
       `delete-resume`, `import`-overwrites: `export_resume()` to
       `~/.local/state/flowcvcli/backups/<resume-id>-<ts>.json` (0600, keep last N).
       `flowcv backups` to list, `flowcv restore <file>` = existing import.
@@ -25,7 +25,12 @@ runtime deps; run `python3 -m unittest discover -s tests -t .`).
       `$EDITOR`, save back via `desc` on close. Reuse `dump`+`set_description`.
       The `markup.html_to_md` reverse converter it needs is DONE (tested,
       round-trip-stable, exported from `__init__`); only the CLI wiring remains.
-- [ ] **JSON Resume interop.** `export --format jsonresume` / `import --format
+- [ ] **JSON Resume interop — CLI wiring only.** The library module is DONE
+      (`flowcvcli/jsonresume.py`: `to_jsonresume`/`from_jsonresume`, 35 tests,
+      lossiness documented). Remaining: `export --format jsonresume` /
+      `import --format jsonresume` in cli.py (goes through `from_jsonresume`
+      with the current resume as base → `import_resume`), export `to_jsonresume`/
+      `from_jsonresume` from `__init__`, README note. Original scope: `export --format jsonresume` / `import --format
       jsonresume` mapping FlowCV sections ⇄ jsonresume.org schema (lossy is fine;
       document what maps).
 - [ ] **Resume-as-code: `flowcv pull` / `flowcv push`.** Export to a directory of
