@@ -10,6 +10,8 @@ shown in the order given by `personalDetails.detailsOrder`.
 """
 import copy
 
+from .errors import NotFoundError
+
 
 class PersonalMixin:
     # ---- core read/write --------------------------------------------------
@@ -47,11 +49,11 @@ class PersonalMixin:
         return self.save_personal(pd)
 
     def remove_link(self, key):
-        """Delete a header link and drop it from detailsOrder. SystemExit if absent."""
+        """Delete a header link and drop it from detailsOrder. NotFoundError if absent."""
         pd = self._pd()
         social = pd.get("social") or {}
         if key not in social:
-            raise SystemExit(f"No header link {key!r}.")
+            raise NotFoundError(f"No header link {key!r}.")
         del social[key]
         pd["social"] = social
         pd["detailsOrder"] = [k for k in (pd.get("detailsOrder") or []) if k != key]

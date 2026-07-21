@@ -11,8 +11,10 @@ import os
 import re
 import sys
 
+from . import __version__
 from .api import FlowCV
 from .client import login as do_login, _write_session, _jar_header
+from .errors import FlowCVError
 from .content import SECTION_META, label_of, rich_field
 from .markup import html_to_text, md_to_html
 
@@ -184,7 +186,12 @@ def cmd_reorder_sections(a):
             for sid in (so.get(a.layout) or {}).get("sectionsSorted") or []:
                 print(f"  {sid}  {name(sid)}")
         return
-    _result(fc.reorder_sections(a.ids, layout=a.layout), f"reorder-sections ({a.layout})")
+    if a.layout == "two" and not a.side:
+        sys.exit("--layout two stores each column separately — add --side left or --side right.")
+    if a.side and a.layout != "two":
+        sys.exit("--side only applies to --layout two.")
+    _result(fc.reorder_sections(a.ids, layout=a.layout, side=a.side),
+            f"reorder-sections ({a.layout}{'/' + a.side if a.side else ''})")
 
 
 def cmd_field(a):
@@ -199,7 +206,10 @@ def cmd_desc(a):
 
 
 def cmd_date(a):
-    _result(_fc(a).set_date(a.section, a.entry, year=a.year, month=a.month, day=a.day),
+    if not (a.year or a.month or a.day or a.clear):
+        sys.exit("nothing to change: pass --year/--month/--day, or --clear to reset the date.")
+    _result(_fc(a).set_date(a.section, a.entry, year=a.year, month=a.month, day=a.day,
+                            clear=a.clear),
             f"{a.section}/{a.entry[:8]}.date")
 
 
@@ -279,7 +289,7 @@ def cmd_download(a):
             f.write(data)
         print(f"saved {out} ({len(data)} bytes)")
     else:
-        path = fc.save_pdf(a.output or "resume.pdf")
+        path = fc.save_pdf(a.output or "resume.pdf", pages=a.pages)
         print(f"saved {path} ({os.path.getsize(path)} bytes)")
 
 
@@ -309,6 +319,7 @@ def build_parser():
     common.add_argument("--resume-id", dest="resume_id_override", help="target a specific resume")
     p = argparse.ArgumentParser(prog="flowcv", description=__doc__, parents=[common],
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def add(name, **kw):
@@ -349,6 +360,8 @@ def build_parser():
     s = add("reorder-sections")
     s.add_argument("ids", nargs="*", help="section ids in the desired order (omit to print the current order)")
     s.add_argument("--layout", default="one", help="column layout (one|two|mix; default one)")
+    s.add_argument("--side", choices=["left", "right"],
+                   help="which column to reorder (required with --layout two)")
     s.set_defaults(fn=cmd_reorder_sections)
 
     s = add("field"); s.add_argument("section"); s.add_argument("entry"); s.add_argument("field")
@@ -363,6 +376,7 @@ def build_parser():
 
     s = add("date"); s.add_argument("section"); s.add_argument("entry")
     s.add_argument("--year"); s.add_argument("--month"); s.add_argument("--day")
+    s.add_argument("--clear", action="store_true", help="reset the date before applying the parts given")
     s.set_defaults(fn=cmd_date)
 
     s = add("pd"); s.add_argument("field")
@@ -383,6 +397,7 @@ def build_parser():
 
     s = add("download"); s.add_argument("-o", "--output")
     s.add_argument("--token", help="download a public resume by its share token (no auth)")
+    s.add_argument("--pages", type=int, default=10, help="max pages to render (default 10)")
     s.set_defaults(fn=cmd_download)
     add("publish").set_defaults(fn=cmd_publish)
     add("unpublish").set_defaults(fn=cmd_unpublish)
@@ -402,4 +417,7 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    args.fn(args)
+    try:
+        args.fn(args)
+    except FlowCVError as e:      # library errors -> argparse-style exit 1 on stderr
+        sys.exit(str(e))

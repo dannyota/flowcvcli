@@ -8,6 +8,8 @@ can check `env["success"]`.
 import json
 import uuid
 
+from .errors import ApiError
+
 # Top-level resume fields that must NOT be copied into a new resume: server
 # regenerates them (unique tokens / timestamps). `id` and `uuid` are reassigned.
 _NEW_RESUME_DROP = ("webToken", "feedbackToken", "createdAt", "updatedAt", "lastChangeAt")
@@ -19,7 +21,7 @@ class ResumeMixin:
         """GET /resumes/all -> the list of resume summaries. Raises on failure."""
         env = self.request("resumes/all")
         if not env.get("success"):
-            raise SystemExit(f"list resumes failed: {env}")
+            raise ApiError(f"list resumes failed: {env}")
         return env["data"]["resumes"]
 
     # ---- create / duplicate / rename / delete -----------------------------
@@ -45,7 +47,7 @@ class ResumeMixin:
             clone["content"] = {}
         env = self.request("resumes/create", method="POST", body={"clientResume": clone})
         if not env.get("success"):
-            raise SystemExit(f"create resume failed: {json.dumps(env)[:200]}")
+            raise ApiError(f"create resume failed: {json.dumps(env)[:200]}")
         return new_id
 
     def create_resume(self, title):
@@ -94,7 +96,7 @@ class ResumeMixin:
             query={"resumeId": self.resume_id, "previewPageCount": pages},
         )
         if status != 200 or not raw.startswith(b"%PDF"):
-            raise SystemExit(f"download failed: HTTP {status}, {raw[:80]!r}")
+            raise ApiError(f"download failed: HTTP {status}, {raw[:80]!r}")
         return raw
 
     def save_pdf(self, path, pages=10):
@@ -107,7 +109,7 @@ class ResumeMixin:
         """Download ANY public/shared resume's PDF by its web token (no ownership needed)."""
         status, raw = self.request_raw("public/download_resume", query={"token": token})
         if status != 200 or not raw.startswith(b"%PDF"):
-            raise SystemExit(f"public download failed: HTTP {status}, {raw[:80]!r}")
+            raise ApiError(f"public download failed: HTTP {status}, {raw[:80]!r}")
         return raw
 
     # ---- web resume -------------------------------------------------------

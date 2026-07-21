@@ -72,7 +72,7 @@ flowcv add work --set title="Engineer" --set company="Acme" \
        --set start=01/2022 --set end=Present --text $'- Did a measurable thing.'
 flowcv add custom2 --section-name "Open Source" --icon code --text "…"   # heading+icon at creation
 flowcv desc work <id> --file role.md           # rich text; --field is optional (auto: profile=text, skill=infoHtml)
-flowcv date publication <id> --year 2018       # structured date (year-only by default)
+flowcv date publication <id> --year 2018       # structured date; merges (only passed parts change), --clear resets
 flowcv field work <id> employer --text "Acme Corp"
 flowcv rm work <id>
 
@@ -83,6 +83,7 @@ flowcv rename-section skill "Core Skills"
 flowcv section-icon skill head-side-brain
 flowcv rm-section custom1 --yes           # delete a section + its entries
 flowcv reorder-sections profile work skill education   # set one-column order (no args = print current)
+flowcv reorder-sections work skill --layout two --side left   # two-column: order one column at a time
 
 # header details & links (links are social entries: orcid, googlescholar, github…)
 flowcv pd jobTitle --text "Security Leader"
@@ -100,7 +101,7 @@ flowcv templates                     # lists each as [free] / [PAID] (paid needs
 flowcv apply-template <templateId>   # warns first if the template is paid
 
 # render & share
-flowcv download -o resume.pdf        # the rendered PDF
+flowcv download -o resume.pdf        # the rendered PDF (--pages N caps rendered pages; default 10)
 flowcv download --token <webToken> -o out.pdf   # any PUBLIC resume by its share token (no auth)
 flowcv share | publish | unpublish
 
@@ -142,6 +143,13 @@ fc.set_date("publication", "id", year=2018)         # structured date (year-only
 import json
 json.dump(fc.export_resume(), open("backup.json", "w"))   # full snapshot
 new_id = fc.import_resume(json.load(open("backup.json")))  # restore into a NEW resume
+
+# errors are normal exceptions (they never SystemExit your process):
+from flowcvcli import FlowCVError, AuthError, RateLimitError, NotFoundError
+try:
+    fc.find_entry(fc.get_resume(), "work", "bad-id")
+except NotFoundError as e:
+    print(e)                                    # all subclass FlowCVError
 ```
 
 ### Build → render → check → improve

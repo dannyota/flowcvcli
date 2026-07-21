@@ -7,6 +7,8 @@ change is a dot-`path` into that object plus a new `value`, sent to
 public catalog and applied via `apply_template`.
 """
 
+from .errors import ApiError, NotFoundError
+
 TEMPLATE_CATALOG = "https://app.flowcv.com/pubcache/published-resume-templates"
 
 
@@ -63,16 +65,16 @@ class CustomizationMixin:
 
         Looks the template up in the catalog, then PATCHes `apply_template` with
         its full `customization` and the resume's current `personalDetails`.
-        Raises SystemExit if no template matches, or if it is a paid (`isPremium`)
-        template and `force` is not set — a paid template requires a FlowCV
-        subscription (the apply request fails with 400 on a free account).
+        Raises NotFoundError if no template matches, or ApiError if it is a paid
+        (`isPremium`) template and `force` is not set — a paid template requires a
+        FlowCV subscription (the apply request fails with 400 on a free account).
         """
         tpl = next((t for t in self.list_templates()
                     if isinstance(t, dict) and (t.get("id") or t.get("templateId")) == template_id), None)
         if tpl is None:
-            raise SystemExit(f"template not found: {template_id!r}")
+            raise NotFoundError(f"template not found: {template_id!r}")
         if tpl.get("isPremium") and not force:
-            raise SystemExit(
+            raise ApiError(
                 f"'{tpl.get('title') or template_id}' is a PAID template — it requires a FlowCV "
                 "subscription (the apply fails with 400 on a free account). Use force=True "
                 "(CLI: --force) if your account is subscribed.")

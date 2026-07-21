@@ -22,12 +22,14 @@ import datetime
 import http.cookiejar
 import json
 import os
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 
 from .config import Config, SESSION_FILE
+from .errors import ApiError, AuthError, RateLimitError
 
 API = "https://app.flowcv.com/api"
 ORIGIN = "https://app.flowcv.com"
@@ -168,8 +170,8 @@ def login(email, password, jar=None):
 
     Returns the jar (creating a fresh one if not supplied), populated with the
     session cookie plus the `appVersion`/`i18n` cookies the API expects on every
-    later request. Raises SystemExit on a 429, a missing curl_cffi, or a failed
-    login.
+    later request. Raises RateLimitError on a 429 and AuthError on a missing
+    curl_cffi or a failed login.
     """
     if jar is None:
         jar = http.cookiejar.CookieJar()
@@ -183,27 +185,27 @@ def login(email, password, jar=None):
         status, info, set_cookies = _impersonated_login(
             email, password, {"i18n": I18N_COOKIE, "appVersion": appver})
     except ImportError:
-        raise SystemExit(
+        raise AuthError(
             "login needs the 'curl_cffi' package: FlowCV throttles Python's TLS "
             "fingerprint on the login endpoint, and curl_cffi presents a browser "
             "one. Install it (`pip install curl_cffi`), or set FLOWCV_COOKIE to a "
             "session cookie captured from a logged-in browser.")
     if status == 429:
-        raise SystemExit(_rate_limit_msg("POST", "auth/login"))
+        raise RateLimitError(_rate_limit_msg("POST", "auth/login"))
     if status != 200:
-        raise SystemExit(f"login failed: HTTP {status} {info[:200]!r}")
+        raise AuthError(f"login failed: HTTP {status} {info[:200]!r}")
     try:
         data = json.loads(info)
     except ValueError:
         data = {}
     if data and not data.get("success"):
-        raise SystemExit(f"login failed (code {data.get('code')}): "
-                         f"{data.get('error') or 'check email/password'}")
+        raise AuthError(f"login failed (code {data.get('code')}): "
+                        f"{data.get('error') or 'check email/password'}")
 
     for name, value in set_cookies.items():
         jar.set_cookie(_make_cookie(name, value))
     if not any(c.name == "flowcvsidapp" for c in jar):
-        raise SystemExit("login succeeded but no session cookie was set")
+        raise AuthError("login succeeded but no session cookie was set")
     return jar
 
 
@@ -236,6 +238,11 @@ class Client:
             return
         if self.cfg.cookie:
             _seed_jar(self._jar, self.cfg.cookie)
+            if not any(c.name == "flowcvsidapp" for c in self._jar):
+                raise AuthError(
+                    "FLOWCV_COOKIE has no flowcvsidapp cookie — paste the full "
+                    "name=value pair from DevTools "
+                    "(FLOWCV_COOKIE=flowcvsidapp=s%3A...), not just the value.")
             self._authed = True
             return
         if os.path.exists(SESSION_FILE):
@@ -251,8 +258,8 @@ class Client:
             self._persist()
             self._authed = True
             return
-        raise SystemExit("No auth. Set FLOWCV_COOKIE, or FLOWCV_EMAIL + "
-                         "FLOWCV_PASSWORD, in .env.")
+        raise AuthError("No auth. Set FLOWCV_COOKIE, or FLOWCV_EMAIL + "
+                        "FLOWCV_PASSWORD, in .env.")
 
     def cookie(self):
         """Current Cookie header (all session cookies). For multipart uploads that
@@ -291,6 +298,10 @@ class Client:
         login(self.cfg.email, self.cfg.password, self._jar)
         self._persist()
         self._authed = True
+        if self.cfg.cookie:
+            print("warning: logged in fresh because FLOWCV_COOKIE was rejected — "
+                  "remove the stale cookie from .env so the cached session is "
+                  "reused (login is capped at ~100/day).", file=sys.stderr)
         return True
 
     @property
@@ -302,16 +313,16 @@ class Client:
         env = self.request("resumes/all")
         resumes = (env.get("data") or {}).get("resumes") if env.get("success") else None
         if resumes is None:
-            raise SystemExit("Could not list resumes to auto-select one — set "
-                             "FLOWCV_RESUME_ID or pass --resume-id.")
+            raise ApiError("Could not list resumes to auto-select one — set "
+                           "FLOWCV_RESUME_ID or pass --resume-id.")
         if not resumes:
-            raise SystemExit("This account has no resumes yet.")
+            raise ApiError("This account has no resumes yet.")
         if len(resumes) == 1:
             self.cfg.resume_id = resumes[0].get("id")   # cache for the rest of the run
             return self.cfg.resume_id
         listing = "\n".join(f"  {r.get('id')}  {r.get('title') or '(untitled)'}" for r in resumes)
-        raise SystemExit("You have multiple resumes — choose one with --resume-id <id> "
-                         "or FLOWCV_RESUME_ID:\n" + listing)
+        raise ApiError("You have multiple resumes — choose one with --resume-id <id> "
+                       "or FLOWCV_RESUME_ID:\n" + listing)
 
     def now_iso(self):
         return now_iso()
@@ -338,30 +349,56 @@ class Client:
         except urllib.error.HTTPError as e:
             return e.code, e.read()
         except urllib.error.URLError as e:   # DNS/conn/TLS/timeout
-            raise SystemExit(f"{method} {url} -> network error: {e.reason}")
+            raise ApiError(f"{method} {url} -> network error: {e.reason}")
+
+    def _auth_rescues(self):
+        """Recovery steps for a 401/403, cheapest first. Yields True after loading
+        a new auth source into the jar (the caller then retries the request), and
+        ends with a fresh login — the expensive step (capped at ~100/day).
+
+        When the seed was a stale FLOWCV_COOKIE, the cached session file written
+        by an earlier login is often still valid, so it is tried before a login.
+        """
+        if self.cfg.cookie and os.path.exists(SESSION_FILE):
+            with open(SESSION_FILE) as f:
+                cached = f.read().strip()
+            if cached and cached != _jar_header(self._jar):
+                self._jar.clear()
+                _seed_jar(self._jar, cached)
+                self._persisted = cached
+                print("warning: FLOWCV_COOKIE was rejected (401) — trying the "
+                      "cached session instead; remove the stale FLOWCV_COOKIE "
+                      "from .env.", file=sys.stderr)
+                yield True
+        yield self.relogin()
+
+    def _send_rescued(self, path, method, body, query, timeout):
+        """_send plus the shared error handling: auth rescue on 401/403 (cached
+        session, then re-login), the 429 message, and session re-persist."""
+        status, raw = self._send(path, method, body, query, timeout)
+        if status in (401, 403):
+            for rescued in self._auth_rescues():
+                if not rescued:
+                    continue
+                status, raw = self._send(path, method, body, query, timeout)
+                if status not in (401, 403):
+                    break
+        if status == 429:
+            raise RateLimitError(_rate_limit_msg(method, path))
+        self._maybe_persist()
+        return status, raw
 
     def request(self, path, method="GET", body=None, query=None, timeout=30):
-        """Return the parsed JSON envelope dict. Retries once after re-login on 401/403."""
-        status, raw = self._send(path, method, body, query, timeout)
-        if status in (401, 403) and self.relogin():
-            status, raw = self._send(path, method, body, query, timeout)
-        if status == 429:
-            raise SystemExit(_rate_limit_msg(method, path))
-        self._maybe_persist()
+        """Return the parsed JSON envelope dict (see _send_rescued for retries)."""
+        status, raw = self._send_rescued(path, method, body, query, timeout)
         try:
             return json.loads(raw.decode())
         except ValueError:
-            raise SystemExit(f"{method} {path} -> HTTP {status}: {raw[:200]!r}")
+            raise ApiError(f"{method} {path} -> HTTP {status}: {raw[:200]!r}")
 
     def request_raw(self, path, query=None, timeout=120):
         """Return (status, bytes). For binary endpoints (PDF download)."""
-        status, raw = self._send(path, "GET", None, query, timeout)
-        if status in (401, 403) and self.relogin():
-            status, raw = self._send(path, "GET", None, query, timeout)
-        if status == 429:
-            raise SystemExit(_rate_limit_msg("GET", path))
-        self._maybe_persist()
-        return status, raw
+        return self._send_rescued(path, "GET", None, query, timeout)
 
     # ---- resume fetch -----------------------------------------------------
     def get_resume(self):
@@ -374,6 +411,6 @@ class Client:
         if not env.get("success") and env.get("reloadClient"):
             env = self.request(f"resumes/{self.resume_id}")   # session-warmup retry
         if not env.get("success"):
-            raise SystemExit(f"get resume failed (code {env.get('code')}): {env.get('error') or ''} "
-                             "(session expired? refresh FLOWCV_COOKIE or re-login)")
+            raise ApiError(f"get resume failed (code {env.get('code')}): {env.get('error') or ''} "
+                           "(session expired? refresh FLOWCV_COOKIE or re-login)")
         return env["data"]["resume"]

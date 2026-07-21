@@ -10,6 +10,7 @@ Mixes into Client; uses self.get_resume / self.request / self.resume_id.
 import re
 import uuid
 
+from .errors import ApiError, NotFoundError
 from .markup import md_to_html
 
 # sectionId -> (sectionType, displayName, iconKey) for creating sections.
@@ -49,7 +50,7 @@ class ContentMixin:
         """Return the section object from resume.content (or exit)."""
         sec = (resume.get("content") or {}).get(section)
         if sec is None:
-            raise SystemExit(f"section not found: {section}")
+            raise NotFoundError(f"section not found: {section}")
         return sec
 
     def find_entry(self, resume, section, entry_id):
@@ -58,7 +59,7 @@ class ContentMixin:
         for entry in sec.get("entries") or []:
             if entry.get("id") == entry_id:
                 return entry
-        raise SystemExit(f"entry not found: {section}/{entry_id}")
+        raise NotFoundError(f"entry not found: {section}/{entry_id}")
 
     # ---- low-level writes -------------------------------------------------
     def save_entry(self, section, entry, extra=None):
@@ -98,7 +99,7 @@ class ContentMixin:
             # customN as a generic custom section.
             section_type, display_name, icon_key = "custom", "Custom", "star"
         else:
-            raise SystemExit(f"unknown section (no meta): {section}")
+            raise ApiError(f"unknown section (no meta): {section}")
         if section_name is not None:
             display_name = section_name
         if section_icon is not None:
@@ -112,7 +113,7 @@ class ContentMixin:
             "sectionIconKey": icon_key,
         })
         if not env.get("success"):
-            raise SystemExit(f"could not create {section} entry: {env}")
+            raise ApiError(f"could not create {section} entry: {env}")
 
         now = self.now_iso()
         entry = {"id": new_id, "isHidden": False, "showPlaceholder": False,
@@ -122,7 +123,7 @@ class ContentMixin:
             entry[rich_field(section)] = md_to_html(md)
         env = self.save_entry(section, entry)
         if not env.get("success"):
-            raise SystemExit(f"created {section} entry {new_id} but failed to populate it: {env}")
+            raise ApiError(f"created {section} entry {new_id} but failed to populate it: {env}")
         return new_id
 
     def set_field(self, section, entry_id, field, value):
@@ -140,20 +141,29 @@ class ContentMixin:
         skill->infoHtml, else description)."""
         return self.set_field(section, entry_id, field or rich_field(section), md_to_html(md))
 
-    def set_date(self, section, entry_id, year=None, month=None, day=None):
-        """Set an entry's structured `date` object (used by publications, etc.).
+    def set_date(self, section, entry_id, year=None, month=None, day=None, clear=False):
+        """Merge into an entry's structured `date` object (publications, etc.).
 
-        Merges into the existing date; month/day left unset are hidden, so
-        `set_date(..., year=2018)` renders as a year-only date.
+        Only the parts passed change: a given month/day is also unhidden; parts
+        never set stay hidden, so `set_date(..., year=2018)` on a fresh entry
+        renders year-only. `clear=True` resets the whole date first.
         """
         resume = self.get_resume()
         entry = dict(self.find_entry(resume, section, entry_id))
-        date = dict(entry.get("date") or {})
-        date["year"] = "" if year is None else str(year)
-        date["month"] = "" if month is None else str(month)
-        date["day"] = "" if day is None else str(day)
-        date["hideMonth"] = month is None
-        date["hideDay"] = day is None
+        date = {} if clear else dict(entry.get("date") or {})
+        date.setdefault("year", "")
+        date.setdefault("month", "")
+        date.setdefault("day", "")
+        date.setdefault("hideMonth", True)
+        date.setdefault("hideDay", True)
+        if year is not None:
+            date["year"] = str(year)
+        if month is not None:
+            date["month"] = str(month)
+            date["hideMonth"] = False
+        if day is not None:
+            date["day"] = str(day)
+            date["hideDay"] = False
         entry["date"] = date
         if "updatedAt" in entry:
             entry["updatedAt"] = self.now_iso()
@@ -175,8 +185,8 @@ class ContentMixin:
         have = [e.get("id") for e in self.find_section(resume, section).get("entries") or []]
         order = list(order)
         if set(order) != set(have):
-            raise SystemExit(f"reorder ids must be exactly the section's entries.\n"
-                             f"  given:   {order}\n  section: {have}")
+            raise ApiError(f"reorder ids must be exactly the section's entries.\n"
+                           f"  given:   {order}\n  section: {have}")
         return self.request("resumes/save_entries_order", method="PATCH",
                             body={"resumeId": self.resume_id, "sectionId": section,
                                   "newEntriesIdsOrder": order, "disableAutoSort": True})
@@ -198,11 +208,19 @@ class ContentMixin:
         return self.request("resumes/delete_section", method="DELETE",
                             query={"resumeId": self.resume_id, "sectionId": section})
 
-    def reorder_sections(self, section_ids, layout="one"):
-        """Set the section order for a column layout via the customization field
-        `sectionOrder.<layout>.sectionsSorted`. `layout` is 'one' (single column;
-        default) — two-column layouts store left/right lists separately.
+    def reorder_sections(self, section_ids, layout="one", side=None):
+        """Set the section order for a column layout. Single-column layouts store
+        one list (`sectionOrder.<layout>.sectionsSorted`); the 'two' layout stores
+        each column separately (`leftSectionsSorted`/`rightSectionsSorted`), so it
+        needs `side` ('left' or 'right') and orders just that column.
 
         Sections are ordered in `resume.customization.sectionOrder`, not in
         `content`, so this is a `save_customization` delta."""
+        if layout == "two":
+            if side not in ("left", "right"):
+                raise ApiError("the two-column layout stores each column separately — "
+                               "pass side='left' or side='right' (CLI: --side).")
+            return self.set(f"sectionOrder.two.{side}SectionsSorted", list(section_ids))
+        if side:
+            raise ApiError(f"side= only applies to the 'two' layout, not {layout!r}.")
         return self.set(f"sectionOrder.{layout}.sectionsSorted", list(section_ids))

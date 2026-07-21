@@ -2,7 +2,11 @@
 from .api import FlowCV
 from .config import Config
 from .content import SECTION_META, label_of
-from .markup import html_to_text, md_to_html
+from .errors import (ApiError, AuthError, FlowCVError, NotFoundError,
+                     RateLimitError)
+from .markup import html_to_md, html_to_text, md_to_html
 
-__all__ = ["FlowCV", "Config", "SECTION_META", "label_of", "md_to_html", "html_to_text"]
+__all__ = ["FlowCV", "Config", "SECTION_META", "label_of", "md_to_html", "html_to_text",
+           "html_to_md",
+           "FlowCVError", "AuthError", "RateLimitError", "NotFoundError", "ApiError"]
 __version__ = "0.6.0"

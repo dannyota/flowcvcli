@@ -17,6 +17,7 @@ import uuid
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 from .client import API, ORIGIN, UA
+from .errors import ApiError
 
 # whole-image crop (matches what FlowCV writes for an un-cropped photo)
 FULL_CROP = {"xPct": 0.0004995004995004271, "yPct": 0.0004995004995004271,
@@ -61,7 +62,7 @@ class PhotoMixin:
         except urllib.error.HTTPError as e:
             env = json.loads(e.read().decode())
         if not env.get("success"):
-            raise SystemExit(f"photo upload failed: {json.dumps(env)[:200]}")
+            raise ApiError(f"photo upload failed: {json.dumps(env)[:200]}")
         return env["data"]["imageId"]
 
     def set_photo(self, src, shape="round"):
@@ -74,9 +75,9 @@ class PhotoMixin:
                     urllib.request.Request(src, headers={"user-agent": UA}), timeout=60) as r:
                 data = r.read(MAX_IMAGE_BYTES + 1)
         else:
-            raise SystemExit(f"photo source not found (not a file or http(s) URL): {src!r}")
+            raise ApiError(f"photo source not found (not a file or http(s) URL): {src!r}")
         if len(data) > MAX_IMAGE_BYTES:
-            raise SystemExit("photo too large (> 10 MB)")
+            raise ApiError("photo too large (> 10 MB)")
         image_id = self.upload_photo(data)
         w, h = image_size(data)
         pd = self._pd()
