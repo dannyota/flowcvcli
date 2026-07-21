@@ -124,6 +124,18 @@ Any command takes `--resume-id <id>` to target a specific resume, and `--json`
 document instead of human text — errors become `{"error", "type"}` on stdout
 with exit 1. (From source, replace `flowcv` with `python3 flowcv.py`.)
 
+### Resume as code
+
+```bash
+flowcv pull [dir]            # materialize the resume as a Markdown tree (default ./resume)
+# edit the files: personal.md, NN-<section>/_section.md, NN-<id8>.md (frontmatter + body)
+flowcv push [dir] --dry-run  # review the diff (last-writer-wins; no 3-way merge)
+flowcv push [dir]            # apply ONLY changes (edits, adds, deletes, reorder, renames)
+```
+
+`pull` then an immediate `push` is a no-op. Full layout, frontmatter rules and
+round-trip caveats: [`docs/PULLPUSH.md`](docs/PULLPUSH.md).
+
 ## Library (for scripts & LLM agents)
 
 ```python

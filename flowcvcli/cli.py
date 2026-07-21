@@ -25,6 +25,7 @@ import sys
 import tempfile
 
 from . import __version__
+from . import repo
 from .api import FlowCV
 from .client import login as do_login, _write_session, _jar_header
 from .config import (Config, dotenv_files_found, resolve_auth_source,
@@ -345,6 +346,56 @@ def cmd_import(a):
     new_id = fc.import_resume(data, title=a.title)
     _emit({"id": new_id, "success": True},
           lambda: print(f"restored backup into a NEW resume -> {new_id} (current resume untouched)"))
+
+
+# ---- resume as code: pull / push -----------------------------------------
+def _action_line(act):
+    """Terse one-line summary of a push action for human output."""
+    kind, sec = act["action"], act.get("section")
+    if kind == "personal":
+        return "update personal.md"
+    if kind == "section_rename":
+        return f"rename section {sec} -> {act['displayName']!r}"
+    if kind == "section_icon":
+        return f"section {sec} icon -> {act['iconKey']}"
+    if kind == "update_entry":
+        bits = list(act.get("fields") or [])
+        if act.get("body"):
+            bits.append("body")
+        return f"update {sec}/{(act.get('id') or '')[:8]} ({', '.join(bits) or 'entry'})"
+    if kind == "add_entry":
+        return f"add {sec} entry {act.get('file','')} -> {act.get('id') or '(new)'}"
+    if kind == "delete_entry":
+        return f"delete {sec}/{(act.get('id') or '')[:8]}"
+    if kind == "reorder":
+        return f"reorder {sec} ({len(act.get('order') or [])} entries)"
+    if kind in ("skip_section", "skip_entry"):
+        return f"skip {sec} ({act.get('reason','')})"
+    return kind
+
+
+def cmd_pull(a):
+    summary = repo.pull(_fc(a), a.dir)
+
+    def human():
+        print(f"pulled {summary['resumeId']} -> {summary['dir']} "
+              f"({summary['sections']} sections, {summary['entries']} entries)")
+    _emit(summary, human)
+
+
+def cmd_push(a):
+    actions = repo.push(_fc(a), a.dir, dry_run=a.dry_run)
+
+    def human():
+        if not actions:
+            print("no changes." if not a.dry_run else "no changes (dry-run).")
+            return
+        prefix = "would " if a.dry_run else ""
+        for act in actions:
+            print(f"  {prefix}{_action_line(act)}")
+        tail = " (dry-run, nothing applied)" if a.dry_run else ""
+        print(f"{len(actions)} action(s){tail}.")
+    _emit({"actions": actions}, human)
 
 
 def cmd_pd(a):
@@ -716,6 +767,19 @@ def build_parser():
     s.add_argument("--format", choices=["flowcv", "jsonresume"], default="flowcv",
                    help="flowcv (raw backup) or jsonresume (a jsonresume.org doc, built onto the current resume)")
     s.set_defaults(fn=cmd_import)
+
+    s = add("pull", description="Materialize the resume as an editable Markdown "
+            "tree (one file per entry, sections as folders). See docs/PULLPUSH.md.")
+    s.add_argument("dir", nargs="?", default="resume",
+                   help="target directory (default ./resume)")
+    s.set_defaults(fn=cmd_pull)
+    s = add("push", description="Apply local Markdown-tree edits back to the "
+            "resume: diff against the live resume and apply ONLY changes.")
+    s.add_argument("dir", nargs="?", default="resume",
+                   help="the tree directory to push (default ./resume)")
+    s.add_argument("--dry-run", action="store_true",
+                   help="print the actions without applying them")
+    s.set_defaults(fn=cmd_push)
 
     s = add("backups", description="List local resume snapshots (auto-saved before "
             "rm-section / delete-resume). Restore one into a NEW resume with "
