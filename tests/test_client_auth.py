@@ -22,7 +22,13 @@ class ScriptedClient(Client):
     def _send(self, path, method, body, query, timeout):
         self._ensure_auth()
         self.sent.append((method, path, _jar_header(self._jar)))
-        return self.script.pop(0)
+        item = self.script.pop(0)
+        if len(item) == 3:                 # (status, body, headers) for 429 Retry-After
+            status, raw, self._last_headers = item
+        else:
+            status, raw = item
+            self._last_headers = {}
+        return status, raw
 
 
 def cookie_cfg(cookie="flowcvsidapp=live"):

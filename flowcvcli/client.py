@@ -18,11 +18,14 @@ returns mid-session (rotation). The full cookie set is persisted to
 `.flowcv_session` (0o600). FlowCV rate-limits login (~100/day) and returns HTTP
 429 when hammered; we surface that clearly rather than retrying into the wall.
 """
+import contextlib
+import copy
 import datetime
 import http.cookiejar
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -155,6 +158,28 @@ def _rate_limit_msg(method, path):
             "logging in repeatedly (login is capped at ~100/day).")
 
 
+def _retry_after_seconds(headers):
+    """Seconds to wait from a `Retry-After` response header, or None to give up.
+
+    Honors only the integer-seconds form; the RFC 7231 HTTP-date form is treated
+    as unparseable (None). Caps the wait at 60s — a longer, missing, negative, or
+    non-integer value returns None so the caller raises instead of stalling.
+    Case-insensitive so it works over a urllib header map or a plain test dict.
+    """
+    value = None
+    for name, val in (headers or {}).items():
+        if name.lower() == "retry-after":
+            value = val
+            break
+    if value is None:
+        return None
+    try:
+        secs = int(str(value).strip())
+    except ValueError:
+        return None
+    return secs if 0 <= secs <= 60 else None
+
+
 def login(email, password, jar=None):
     """Authenticate and load the full session cookie set into a cookie jar.
 
@@ -229,6 +254,9 @@ class Client:
             urllib.request.HTTPCookieProcessor(self._jar))
         self._authed = False      # has the jar been seeded yet?
         self._persisted = None    # last cookie header written to .flowcv_session
+        self._last_headers = {}   # response headers of the most recent _send (429 Retry-After)
+        self._batch_depth = 0     # >0 while inside batch(): get_resume() is cached
+        self._batch_cache = None  # the one fetched resume shared across a batch
 
     # ---- auth -------------------------------------------------------------
     def _ensure_auth(self):
@@ -343,10 +371,14 @@ class Client:
             data = json.dumps(body).encode()
             headers["content-type"] = "application/json"
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        # Stash the response headers on self (not a wider return tuple) so the
+        # 429 Retry-After handling can read them without changing _send's shape.
         try:
             with self._opener.open(req, timeout=timeout) as r:
+                self._last_headers = dict(r.headers)
                 return r.status, r.read()
         except urllib.error.HTTPError as e:
+            self._last_headers = dict(e.headers or {})
             return e.code, e.read()
         except urllib.error.URLError as e:   # DNS/conn/TLS/timeout
             raise ApiError(f"{method} {url} -> network error: {e.reason}")
@@ -374,7 +406,7 @@ class Client:
 
     def _send_rescued(self, path, method, body, query, timeout):
         """_send plus the shared error handling: auth rescue on 401/403 (cached
-        session, then re-login), the 429 message, and session re-persist."""
+        session, then re-login), one polite 429 Retry-After retry, and re-persist."""
         status, raw = self._send(path, method, body, query, timeout)
         if status in (401, 403):
             for rescued in self._auth_rescues():
@@ -384,12 +416,22 @@ class Client:
                 if status not in (401, 403):
                     break
         if status == 429:
-            raise RateLimitError(_rate_limit_msg(method, path))
+            # Honor a short `Retry-After` with exactly one retry; a missing /
+            # unparseable / >60s header means don't wait — raise straight away.
+            delay = _retry_after_seconds(self._last_headers)
+            if delay is None:
+                raise RateLimitError(_rate_limit_msg(method, path))
+            time.sleep(delay)
+            status, raw = self._send(path, method, body, query, timeout)
+            if status == 429:
+                raise RateLimitError(_rate_limit_msg(method, path))
         self._maybe_persist()
         return status, raw
 
     def request(self, path, method="GET", body=None, query=None, timeout=30):
         """Return the parsed JSON envelope dict (see _send_rescued for retries)."""
+        if method != "GET":
+            self._batch_cache = None   # a write may change structure; force a refetch
         status, raw = self._send_rescued(path, method, body, query, timeout)
         try:
             return json.loads(raw.decode())
@@ -401,8 +443,40 @@ class Client:
         return self._send_rescued(path, "GET", None, query, timeout)
 
     # ---- resume fetch -----------------------------------------------------
+    @contextlib.contextmanager
+    def batch(self):
+        """Fetch the resume at most once for a burst of reads (fewer GETs).
+
+        Inside the `with`, `get_resume()` caches its first result and reuses it, so
+        N reads cost 1 GET against the rate-limited API; any write (a non-GET
+        `request`) invalidates the cache and the next read refetches. Each read
+        still returns an independent deep copy, so a caller mutating the result
+        can't poison the cache. Reentrant: nested batches share one cache and only
+        the outermost exit clears it. Outside a batch there is no caching (behavior
+        is exactly as before).
+        """
+        self._batch_depth += 1
+        try:
+            yield self
+        finally:
+            self._batch_depth -= 1
+            if self._batch_depth == 0:
+                self._batch_cache = None
+
     def get_resume(self):
         """Return the full resume object (data.resume). Raises on failure.
+
+        Inside a `batch()` the resume is fetched once and reused (see `batch`);
+        every call returns a fresh deep copy so callers can mutate it freely.
+        """
+        if self._batch_depth:
+            if self._batch_cache is None:
+                self._batch_cache = self._fetch_resume()
+            return copy.deepcopy(self._batch_cache)
+        return self._fetch_resume()
+
+    def _fetch_resume(self):
+        """GET the resume envelope and unwrap data.resume.
 
         A freshly minted session can return `400 reloadClient:true` on its first
         heavy read and then succeed; retry once on that signal before giving up.

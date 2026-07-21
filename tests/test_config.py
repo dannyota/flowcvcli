@@ -40,5 +40,15 @@ class DotenvTest(unittest.TestCase):
         self.assertEqual(cfg.email, "env@x")
 
 
+class RequireResumeIdTest(unittest.TestCase):
+    def test_missing_resume_id_raises_catchable_error(self):
+        from flowcvcli.errors import ApiError
+        with self.assertRaises(ApiError):
+            Config().require_resume_id()
+
+    def test_present_resume_id_is_returned(self):
+        self.assertEqual(Config(resume_id="R1").require_resume_id(), "R1")
+
+
 if __name__ == "__main__":
     unittest.main()

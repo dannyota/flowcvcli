@@ -43,6 +43,14 @@ class MdToHtmlTest(unittest.TestCase):
         self.assertEqual(md_to_html("***Note***"),
                          f"<p{J}><strong><em>Note</em></strong></p>")
 
+    def test_heading_with_inline_bold_does_not_nest_strong(self):
+        self.assertEqual(md_to_html("## a **b** c"),
+                         f"<p{J}><strong>a b c</strong></p>")
+
+    def test_bold_italic_line_with_inline_bold_does_not_nest_strong(self):
+        self.assertEqual(md_to_html("***a **b** c***"),
+                         f"<p{J}><strong><em>a b c</em></strong></p>")
+
 
 class HtmlToTextTest(unittest.TestCase):
     def test_strips_tags_and_unescapes(self):
@@ -99,6 +107,10 @@ class HtmlToMdTest(unittest.TestCase):
         self.assertEqual(
             html_to_md('<p class="y" style="text-align: justify">x</p>'), "x")
 
+    def test_nested_strong_collapses(self):
+        h = f"<p{J}><strong>a <strong>b</strong> c</strong></p>"
+        self.assertEqual(html_to_md(h), "**a b c**")
+
     def test_md_to_html_round_trip_is_stable(self):
         cases = [
             "hello",
@@ -113,6 +125,10 @@ class HtmlToMdTest(unittest.TestCase):
             "line one\n\nline two\n\n- b1\n- b2\n\n## Heading",
             "## See [x](https://x.example)",
             "**See [x](https://x.example)**",
+            "## Skills in **Python** and Go",
+            "## a ***b*** c",
+            "***a **b** c***",
+            "**a **b** c**",
         ]
         for md in cases:
             html = md_to_html(md)

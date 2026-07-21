@@ -13,6 +13,8 @@ same whether it's run from source or ``pip install``-ed.
 """
 import os
 
+from .errors import ApiError
+
 APP = "flowcvcli"
 
 
@@ -82,6 +84,6 @@ class Config:
 
     def require_resume_id(self):
         if not self.resume_id:
-            raise SystemExit("No resume id. Set FLOWCV_RESUME_ID, pass resume_id=, "
-                             "or use --resume-id. Run `flowcv resumes` to list them.")
+            raise ApiError("No resume id. Set FLOWCV_RESUME_ID, pass resume_id=, "
+                           "or use --resume-id. Run `flowcv resumes` to list them.")
         return self.resume_id

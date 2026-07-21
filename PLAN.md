@@ -7,19 +7,14 @@ runtime deps; run `python3 -m unittest discover -s tests -t .`).
 
 ## Phase 2 — library & robustness
 
-- [ ] **Batch context.** Each `set_field`/`set_date`/`hide_entry`/`desc` does a
-      full `get_resume()` → N edits = 2N requests against a rate-limited API.
-      Add `with fc.batch():` (or `fc.cached_resume()`) that fetches once and
-      reuses; invalidate on writes that change structure.
-- [ ] **429 handling.** Plumb response headers through `_send`; on 429 honor
-      `Retry-After` with one polite retry before giving up (cap the wait, e.g. 60s).
 - [ ] **`flowcv doctor`.** Check: auth source + validity (cheap `resumes/all`),
       session file age/perms, curl_cffi importable, resume id resolves, appVersion
       fetch. Print pass/fail lines; exit non-zero on failure.
 
 ## Phase 3 — features (by value)
 
-- [ ] **`--json` global flag.** Machine-readable output for every command (the
+- [ ] *(in progress — background agent)* **`--json` global flag.**
+      Machine-readable output for every command (the
       README targets LLM agents/scripts). Emit the envelope/ids/entries as JSON to
       stdout; human text unchanged by default. Route all prints through a small
       output helper so commands don't branch everywhere.

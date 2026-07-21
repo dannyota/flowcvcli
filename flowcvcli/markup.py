@@ -19,14 +19,28 @@ from html.parser import HTMLParser
 J = ' style="text-align: justify"'
 
 
+_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+_LINK_SUB = r'<a target="_blank" rel="noopener noreferrer nofollow" href="\2">\1</a>'
+
+
 def _esc(s):
     """Escape text, then honor inline ***bold-italic***, **bold**, and
     [text](url) links (triple-asterisks before double so they don't clash)."""
     s = html.escape(s, quote=False)
     s = re.sub(r"\*\*\*(.+?)\*\*\*", r"<strong><em>\1</em></strong>", s)
     s = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
-    return re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)",
-                  r'<a target="_blank" rel="noopener noreferrer nofollow" href="\2">\1</a>', s)
+    return _LINK_RE.sub(_LINK_SUB, s)
+
+
+def _esc_bold_line(s):
+    """Escape text for a line that is already bold as a whole (## heading,
+    **…** / ***…*** line). Inline bold markers are redundant there, and nesting
+    <strong> breaks html_to_md's inverse (a doubled ** re-parses differently),
+    so they collapse to plain text; links still work."""
+    s = html.escape(s, quote=False)
+    s = re.sub(r"\*\*\*(.+?)\*\*\*", r"\1", s)
+    s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)
+    return _LINK_RE.sub(_LINK_SUB, s)
 
 
 def md_to_html(md):
@@ -48,11 +62,11 @@ def md_to_html(md):
             continue
         flush()
         if line.startswith("## "):
-            parts.append(f"<p{J}><strong>{_esc(line[3:].strip())}</strong></p>")
+            parts.append(f"<p{J}><strong>{_esc_bold_line(line[3:].strip())}</strong></p>")
         elif len(line) > 6 and line.startswith("***") and line.endswith("***"):
-            parts.append(f"<p{J}><strong><em>{_esc(line[3:-3].strip())}</em></strong></p>")
+            parts.append(f"<p{J}><strong><em>{_esc_bold_line(line[3:-3].strip())}</em></strong></p>")
         elif len(line) > 4 and line.startswith("**") and line.endswith("**") and line.count("**") == 2:
-            parts.append(f"<p{J}><strong>{_esc(line[2:-2].strip())}</strong></p>")
+            parts.append(f"<p{J}><strong>{_esc_bold_line(line[2:-2].strip())}</strong></p>")
         else:
             parts.append(f"<p{J}>{_esc(line)}</p>")
     flush()
@@ -66,6 +80,7 @@ class _MdBuilder(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.blocks, self.bullets, self.buf, self.hrefs = [], [], [], []
         self.in_ul = self.in_p = False
+        self.strong = 0     # depth: nested <strong> is redundant, collapse it
 
     def handle_starttag(self, tag, attrs):
         if tag == "ul":
@@ -73,7 +88,9 @@ class _MdBuilder(HTMLParser):
         elif tag == "p":
             self.in_p, self.buf = True, []
         elif tag == "strong":
-            self.buf.append("**")
+            self.strong += 1
+            if self.strong == 1:
+                self.buf.append("**")
         elif tag == "em":
             self.buf.append("*")
         elif tag == "a":
@@ -82,7 +99,9 @@ class _MdBuilder(HTMLParser):
 
     def handle_endtag(self, tag):
         if tag == "strong":
-            self.buf.append("**")
+            if self.strong == 1:
+                self.buf.append("**")
+            self.strong = max(0, self.strong - 1)
         elif tag == "em":
             self.buf.append("*")
         elif tag == "a":
@@ -116,8 +135,11 @@ def html_to_md(html):
 
     The inverse is lossy in one direction: "## H" and "**H**" both produce the
     same <p><strong>H</strong></p>, so a bold paragraph always round-trips to
-    the "**H**" form (never "## H"). Re-running md_to_html on the result is
-    stable: md_to_html(html_to_md(md_to_html(md))) == md_to_html(md).
+    the "**H**" form (never "## H"). Nested <strong> (redundant bold, e.g. from
+    foreign editor HTML) collapses to one ** pair — md_to_html never emits it
+    (bold markers inside an already-bold line are dropped as redundant).
+    Re-running md_to_html on the result is stable:
+    md_to_html(html_to_md(md_to_html(md))) == md_to_html(md).
     """
     if not html:
         return ""
