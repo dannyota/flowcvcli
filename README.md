@@ -6,10 +6,14 @@
 
 Control a [FlowCV](https://flowcv.com) resume from the **command line** or from
 **Python** — content, header & links, **customization**, **templates**,
-**avatar**, reorder/hide, multi-resume management, **backup/restore**, publish, and **PDF export**.
+**avatar**, reorder/hide, multi-resume management, **backup/restore**, publish,
+**PDF export**, **resume-as-code** (`pull`/`push` a git-diffable Markdown tree),
+**JSON Resume** import/export, `$EDITOR` editing, auto-snapshots before
+destructive ops, and machine-readable **`--json`** output for every command.
 It drives FlowCV's private JSON API (the same calls the web app makes), so it
-works for any FlowCV resume with your own session. **Zero dependencies** (Python
-standard library only), so it's easy to drop into scripts and LLM agents.
+works for any FlowCV resume with your own session. One tiny dependency
+(`curl_cffi`, only for the login TLS fingerprint); everything else is the Python
+standard library, so it drops easily into scripts and LLM agents.
 
 > Unofficial and not affiliated with FlowCV. It uses FlowCV's undocumented
 > internal API and may break if that changes; use it with your own account and at
@@ -114,8 +118,10 @@ flowcv export -o backup.json          # full resume snapshot (JSON) — keep one
 flowcv import backup.json             # restore the snapshot into a NEW resume (non-destructive)
 flowcv export --format jsonresume -o me.json   # export to the jsonresume.org schema
 flowcv import --format jsonresume me.json      # build a NEW resume from a JSON Resume doc
+flowcv backups                        # list auto-snapshots (rm-section / delete-resume snapshot first; --no-backup opts out)
 
 flowcv login                          # refresh the cached session
+flowcv doctor                         # diagnose auth/session/setup (--offline skips the live probe)
 flowcv md2html --file role.md         # preview HTML (offline)
 ```
 
@@ -200,6 +206,10 @@ feedback loop for building a resume from raw info.
 | `**bold**` / `***bold-italic***` inline | `<strong>` / `<strong><em>…</em></strong>` |
 | `[text](url)` inline | link |
 
+Bold markers inside an already-bold line or `**span**` are redundant and
+collapse to plain text — this keeps markdown ⇄ HTML round-trips stable
+(`flowcv edit`, `pull`/`push`).
+
 ## How it works
 
 - **Read-modify-write**: edits fetch the resume, change one part, and send it
@@ -217,17 +227,21 @@ feedback loop for building a resume from raw info.
 ```
 flowcvcli/             # the package (import flowcvcli)
   config.py            #   resolve resume id + auth from .env / env vars
-  client.py            #   HTTP, login, cookie-jar session, retry, get_resume
-  markup.py            #   markdown <-> FlowCV rich-text HTML
+  client.py            #   HTTP, login, cookie-jar session, retry, batch cache
+  errors.py            #   FlowCVError hierarchy (Auth/RateLimit/NotFound/Api)
+  markup.py            #   markdown <-> FlowCV rich-text HTML (both directions)
   content.py           #   sections & entries (add/edit/reorder/hide/sections)
   personal.py          #   header details & links
   customization.py     #   styling deltas & templates
   jsonresume.py        #   JSON Resume (jsonresume.org) import/export
+  repo.py              #   resume-as-code: pull/push Markdown tree
   photo.py             #   avatar upload / toggle
-  resume.py            #   list, create/duplicate/rename/delete, download, publish
+  resume.py            #   list, create/duplicate/rename/delete, download, publish, snapshots
   api.py               #   FlowCV = Client + all mixins
   cli.py / __main__.py #   the `flowcv` command
+tests/                 # offline unit tests: python3 -m unittest discover -s tests -t .
 docs/API.md            # reverse-engineered API reference
+docs/PULLPUSH.md       # resume-as-code design (layout, frontmatter, diff rules)
 docs/RENDERING.md      # how the editor renders the preview & debounces saves
 flowcv.py              # source-tree entry point (python3 flowcv.py …)
 ```
